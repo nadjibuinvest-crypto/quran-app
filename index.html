@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Learn Quran — 14 Day Surah Plan</title>
+<link rel="stylesheet" href="styles.css?v=3">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1a2530">
+<link rel="icon" href="icons/icon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Learn Quran">
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">🕌 <span>Learn Quran</span></div>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="learn">Learn</button>
+      <button class="tab-btn" data-tab="progress">Progress</button>
+      <button class="tab-btn" data-tab="surahs">All Surahs</button>
+      <button class="tab-btn" data-tab="prayer">Prayer Times</button>
+      <button class="tab-btn" data-tab="masjids">Masjid Events</button>
+      <button class="tab-btn" data-tab="settings">Settings</button>
+    </nav>
+  </header>
+
+  <main>
+
+    <!-- LEARN TAB -->
+    <section id="tab-learn" class="tab-panel active">
+      <div id="no-surah-selected" class="card empty-state" hidden>
+        <h2>No surah in progress</h2>
+        <p>Pick a surah from "All Surahs" to start your 14-day learning plan.</p>
+        <button id="btn-goto-surahs" class="btn primary">Choose a Surah</button>
+      </div>
+
+      <div id="learn-content" hidden>
+        <div class="card plan-header">
+          <div class="plan-title">
+            <h2 id="learn-surah-name">—</h2>
+            <span id="learn-surah-arabic" class="arabic-name"></span>
+            <span id="learn-surah-meta" class="muted"></span>
+          </div>
+          <div class="day-badge">
+            <div class="day-num" id="day-number">1</div>
+            <div class="day-label">of 14 days</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="progress-track">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+          <div class="progress-labels">
+            <span>Day 1</span>
+            <span id="phase-label" class="muted"></span>
+            <span>Day 14</span>
+          </div>
+          <div class="plan-actions">
+            <button id="btn-mark-today" class="btn secondary" disabled>✓ Mark today practiced</button>
+            <button id="btn-finish-surah" class="btn primary" hidden>🎉 Finished! Start Next Surah</button>
+          </div>
+          <p id="mark-practiced-helper" class="muted quiz-helper"></p>
+          <p id="finish-helper" class="muted quiz-helper"></p>
+          <p class="streak-line">🔥 Streak: <span id="streak-count">0</span> days practiced this cycle</p>
+          <p id="pace-warning" class="pace-warning" hidden></p>
+        </div>
+
+        <div class="card">
+          <h3>Today's focus</h3>
+          <p id="today-focus-text" class="muted"></p>
+        </div>
+
+        <div class="card">
+          <h3>Test Yourself</h3>
+          <p class="muted">Read and listen first, then check what actually stuck — this is what unlocks marking today practiced.</p>
+          <div id="quiz-area" class="quiz-area"></div>
+        </div>
+
+        <div class="card" id="recitation-card" hidden>
+          <h3>Recite the Surah — Day 14 Gate</h3>
+          <p class="muted">Record yourself reciting the full surah from memory (no reading along), then listen back. You can't finish this surah until you confirm below.</p>
+          <div class="recitation-controls">
+            <button id="btn-record-recitation" class="btn secondary">🎙️ Start Recording</button>
+          </div>
+          <audio id="recitation-audio" controls style="width:100%; margin-top:10px;" hidden></audio>
+          <p id="recitation-score-note" class="muted" hidden></p>
+          <label class="recitation-confirm-row">
+            <input type="checkbox" id="recitation-confirm-checkbox" disabled>
+            <span>I listened back and I'm confident I recited this surah correctly.</span>
+          </label>
+        </div>
+
+        <div class="card">
+          <div class="audio-row">
+            <h3>Listen</h3>
+            <div class="audio-buttons">
+              <button id="btn-play-audio" class="btn secondary">▶ Play Recitation</button>
+              <a id="link-youtube" class="btn ghost" target="_blank" rel="noopener">YouTube</a>
+              <a id="link-spotify" class="btn ghost" target="_blank" rel="noopener">Spotify</a>
+            </div>
+          </div>
+          <audio id="audio-player" controls style="width:100%; margin-top:10px;" hidden></audio>
+          <div id="youtube-embed-wrap" hidden>
+            <iframe id="youtube-embed" width="100%" height="220" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Verses</h3>
+          <div id="verses-list" class="verses-list">
+            <p class="muted">Loading verses…</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PROGRESS TAB -->
+    <section id="tab-progress" class="tab-panel">
+      <div class="card">
+        <div class="settings-row" style="border-bottom:none; padding-top:0;">
+          <div>
+            <h2 style="margin-bottom:2px;">Monthly Goal</h2>
+            <p class="muted">Surahs finished this calendar month</p>
+          </div>
+          <select id="monthly-goal-select">
+            <option value="1">1 surah / month</option>
+            <option value="2">2 surahs / month</option>
+          </select>
+        </div>
+        <div class="progress-track" style="margin-top:14px;">
+          <div class="progress-fill" id="month-progress-fill"></div>
+        </div>
+        <p id="month-progress-text" class="muted" style="margin-top:8px;"></p>
+        <p id="month-pace-text" class="pace-status"></p>
+      </div>
+
+      <div class="card">
+        <h3>Current cycle accountability</h3>
+        <p id="progress-cycle-text" class="muted"></p>
+      </div>
+
+      <div class="card">
+        <h3>Completed Surahs</h3>
+        <div id="completed-list" class="completed-list">
+          <p class="muted">No surahs completed yet.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ALL SURAHS TAB -->
+    <section id="tab-surahs" class="tab-panel">
+      <div class="card">
+        <input id="surah-search" type="text" placeholder="Search surahs by name or number…" class="search-input">
+      </div>
+      <div id="surah-list" class="surah-grid">
+        <p class="muted">Loading surah list…</p>
+      </div>
+    </section>
+
+    <!-- PRAYER TIMES TAB -->
+    <section id="tab-prayer" class="tab-panel">
+      <div class="card">
+        <div class="location-row">
+          <div>
+            <h2>Prayer Times</h2>
+            <p id="location-display" class="muted">No location set</p>
+          </div>
+          <div class="location-actions">
+            <button id="btn-use-location" class="btn secondary">📍 Use My Location</button>
+          </div>
+        </div>
+        <div class="manual-city-row">
+          <input id="manual-zip" type="text" inputmode="numeric" placeholder="Or type your ZIP code, e.g. 75023" maxlength="5">
+          <button id="btn-set-zip" class="btn ghost">Set ZIP</button>
+        </div>
+      </div>
+      <div id="prayer-times-card" class="card" hidden>
+        <p class="muted" id="prayer-date"></p>
+        <div class="prayer-grid" id="prayer-grid"></div>
+        <p class="next-prayer" id="next-prayer-line"></p>
+      </div>
+    </section>
+
+    <!-- MASJID EVENTS TAB -->
+    <section id="tab-masjids" class="tab-panel">
+      <div class="card">
+        <h2>DFW-Area Masjids</h2>
+        <p class="muted">There's no public API for mosque event calendars or social media, so add each masjid's real weekly schedule yourself (Jumu'ah time, classes, etc) — saved on this device. Add an address to a masjid to sort it by distance, or a website/Facebook link for one-tap access to their real page.</p>
+        <div class="manual-city-row" style="margin-top:14px;">
+          <input id="masjid-zip" type="text" inputmode="numeric" placeholder="Show masjids within 70 miles of ZIP…" maxlength="5">
+          <button id="btn-masjid-zip" class="btn ghost">Update</button>
+        </div>
+        <p id="masjid-zip-status" class="muted" style="margin-top:8px;"></p>
+      </div>
+      <div id="masjid-list" class="masjid-list"></div>
+    </section>
+
+    <!-- SETTINGS TAB -->
+    <section id="tab-settings" class="tab-panel">
+      <div class="card">
+        <h2>Settings</h2>
+        <div class="settings-row">
+          <div>
+            <strong>Current plan</strong>
+            <p class="muted" id="settings-current-plan">No surah in progress</p>
+          </div>
+          <button id="btn-reset-plan" class="btn danger-ghost">Reset current plan</button>
+        </div>
+        <div class="settings-row">
+          <div>
+            <strong>Correct cycle start date</strong>
+            <p class="muted">Only for fixing a mistaken date — not a shortcut to skip ahead.</p>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <input type="date" id="settings-start-date" disabled>
+            <button id="btn-save-start-date" class="btn ghost">Save</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div>
+            <strong>Completed surahs</strong>
+            <p class="muted" id="settings-completed-count">0 completed</p>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div>
+            <strong>Preferred reciter (for audio search)</strong>
+            <p class="muted">Used to build your YouTube/Spotify search links</p>
+          </div>
+          <select id="reciter-select">
+            <option value="Mishary Alafasy">Mishary Rashid Alafasy</option>
+            <option value="Abdul Rahman Al-Sudais">Abdul Rahman Al-Sudais</option>
+            <option value="Saad Al-Ghamdi">Saad Al-Ghamdi</option>
+            <option value="Maher Al-Muaiqly">Maher Al-Muaiqly</option>
+            <option value="Yasser Al-Dosari">Yasser Al-Dosari</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<template id="masjid-card-template">
+  <div class="card masjid-card">
+    <div class="masjid-head">
+      <div>
+        <h3 class="masjid-name"></h3>
+        <span class="muted masjid-city"></span>
+        <span class="muted masjid-distance"></span>
+      </div>
+      <button class="btn ghost btn-edit-masjid">Edit</button>
+    </div>
+    <a class="masjid-link" target="_blank" rel="noopener" hidden></a>
+    <div class="masjid-schedule-view"></div>
+    <div class="masjid-schedule-edit" hidden>
+      <textarea class="masjid-schedule-input" rows="4" placeholder="e.g. Jumu'ah: 1:00 PM & 2:00 PM&#10;Quran class: Sat 10 AM"></textarea>
+      <input class="masjid-address-input" type="text" placeholder="Street address (for distance sorting), e.g. 123 Main St, Plano, TX 75023">
+      <input class="masjid-link-input" type="text" placeholder="Website or Facebook link (optional)">
+      <div class="masjid-edit-actions">
+        <button class="btn secondary btn-save-masjid">Save</button>
+        <button class="btn ghost btn-cancel-masjid">Cancel</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script src="app.js?v=4"></script>
+</body>
+</html>
