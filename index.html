@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Learn Quran — 14 Day Surah Plan</title>
-<link rel="stylesheet" href="styles.css?v=3">
+<link rel="stylesheet" href="styles.css?v=4">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1a2530">
 <link rel="icon" href="icons/icon-32.png" sizes="32x32">
@@ -22,8 +22,6 @@
       <button class="tab-btn active" data-tab="learn">Learn</button>
       <button class="tab-btn" data-tab="progress">Progress</button>
       <button class="tab-btn" data-tab="surahs">All Surahs</button>
-      <button class="tab-btn" data-tab="prayer">Prayer Times</button>
-      <button class="tab-btn" data-tab="masjids">Masjid Events</button>
       <button class="tab-btn" data-tab="settings">Settings</button>
     </nav>
   </header>
@@ -32,6 +30,15 @@
 
     <!-- LEARN TAB -->
     <section id="tab-learn" class="tab-panel active">
+      <div class="card quote-card">
+        <h3>✨ Motivation — Ayah of the Day</h3>
+        <div id="quote-arabic" class="quote-arabic"></div>
+        <p id="quote-translation" class="quote-translation"></p>
+        <p id="quote-reference" class="muted quote-reference"></p>
+        <p id="quote-story" class="muted quote-story"></p>
+        <a id="quote-youtube-link" class="btn ghost" target="_blank" rel="noopener" hidden>▶ Learn the story on YouTube</a>
+      </div>
+
       <div id="no-surah-selected" class="card empty-state" hidden>
         <h2>No surah in progress</h2>
         <p>Pick a surah from "All Surahs" to start your 14-day learning plan.</p>
@@ -83,15 +90,15 @@
 
         <div class="card" id="recitation-card" hidden>
           <h3>Recite the Surah — Day 14 Gate</h3>
-          <p class="muted">Record yourself reciting the full surah from memory (no reading along), then listen back. You can't finish this surah until you confirm below.</p>
+          <p class="muted">Record yourself reciting the full surah from memory (no reading along). Then you must listen to your ENTIRE recording, start to finish, before you can confirm and move on — skipping ahead won't unlock it.</p>
           <div class="recitation-controls">
             <button id="btn-record-recitation" class="btn secondary">🎙️ Start Recording</button>
           </div>
           <audio id="recitation-audio" controls style="width:100%; margin-top:10px;" hidden></audio>
-          <p id="recitation-score-note" class="muted" hidden></p>
+          <p id="recitation-listen-note" class="muted" hidden></p>
           <label class="recitation-confirm-row">
             <input type="checkbox" id="recitation-confirm-checkbox" disabled>
-            <span>I listened back and I'm confident I recited this surah correctly.</span>
+            <span>I listened to the whole recording and I'm confident I recited this surah correctly.</span>
           </label>
         </div>
 
@@ -162,44 +169,6 @@
       </div>
     </section>
 
-    <!-- PRAYER TIMES TAB -->
-    <section id="tab-prayer" class="tab-panel">
-      <div class="card">
-        <div class="location-row">
-          <div>
-            <h2>Prayer Times</h2>
-            <p id="location-display" class="muted">No location set</p>
-          </div>
-          <div class="location-actions">
-            <button id="btn-use-location" class="btn secondary">📍 Use My Location</button>
-          </div>
-        </div>
-        <div class="manual-city-row">
-          <input id="manual-zip" type="text" inputmode="numeric" placeholder="Or type your ZIP code, e.g. 75023" maxlength="5">
-          <button id="btn-set-zip" class="btn ghost">Set ZIP</button>
-        </div>
-      </div>
-      <div id="prayer-times-card" class="card" hidden>
-        <p class="muted" id="prayer-date"></p>
-        <div class="prayer-grid" id="prayer-grid"></div>
-        <p class="next-prayer" id="next-prayer-line"></p>
-      </div>
-    </section>
-
-    <!-- MASJID EVENTS TAB -->
-    <section id="tab-masjids" class="tab-panel">
-      <div class="card">
-        <h2>DFW-Area Masjids</h2>
-        <p class="muted">There's no public API for mosque event calendars or social media, so add each masjid's real weekly schedule yourself (Jumu'ah time, classes, etc) — saved on this device. Add an address to a masjid to sort it by distance, or a website/Facebook link for one-tap access to their real page.</p>
-        <div class="manual-city-row" style="margin-top:14px;">
-          <input id="masjid-zip" type="text" inputmode="numeric" placeholder="Show masjids within 70 miles of ZIP…" maxlength="5">
-          <button id="btn-masjid-zip" class="btn ghost">Update</button>
-        </div>
-        <p id="masjid-zip-status" class="muted" style="margin-top:8px;"></p>
-      </div>
-      <div id="masjid-list" class="masjid-list"></div>
-    </section>
-
     <!-- SETTINGS TAB -->
     <section id="tab-settings" class="tab-panel">
       <div class="card">
@@ -246,30 +215,6 @@
   </main>
 </div>
 
-<template id="masjid-card-template">
-  <div class="card masjid-card">
-    <div class="masjid-head">
-      <div>
-        <h3 class="masjid-name"></h3>
-        <span class="muted masjid-city"></span>
-        <span class="muted masjid-distance"></span>
-      </div>
-      <button class="btn ghost btn-edit-masjid">Edit</button>
-    </div>
-    <a class="masjid-link" target="_blank" rel="noopener" hidden></a>
-    <div class="masjid-schedule-view"></div>
-    <div class="masjid-schedule-edit" hidden>
-      <textarea class="masjid-schedule-input" rows="4" placeholder="e.g. Jumu'ah: 1:00 PM & 2:00 PM&#10;Quran class: Sat 10 AM"></textarea>
-      <input class="masjid-address-input" type="text" placeholder="Street address (for distance sorting), e.g. 123 Main St, Plano, TX 75023">
-      <input class="masjid-link-input" type="text" placeholder="Website or Facebook link (optional)">
-      <div class="masjid-edit-actions">
-        <button class="btn secondary btn-save-masjid">Save</button>
-        <button class="btn ghost btn-cancel-masjid">Cancel</button>
-      </div>
-    </div>
-  </div>
-</template>
-
-<script src="app.js?v=4"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

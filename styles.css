@@ -101,10 +101,17 @@ main { padding: 18px; }
 .verse-arabic { font-size: 1.5rem; direction: rtl; line-height: 2.1; margin: 6px 0; }
 .verse-translation { color: var(--muted); font-size: 0.92rem; }
 
-.search-input, #manual-city {
+.search-input {
   width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
   background: var(--bg-elev); color: var(--text); font-size: 0.9rem;
 }
+
+.quote-card { background: linear-gradient(160deg, var(--card), var(--bg-elev)); border-color: var(--accent); }
+.quote-arabic { font-size: 1.5rem; direction: rtl; line-height: 2; margin: 4px 0 10px; }
+.quote-translation { font-size: 0.95rem; margin: 0 0 6px; }
+.quote-reference { font-weight: 600; color: var(--accent) !important; }
+.quote-story { margin-top: 8px; line-height: 1.5; }
+#quote-youtube-link { margin-top: 12px; }
 
 .surah-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
 .surah-card {
@@ -118,30 +125,6 @@ main { padding: 18px; }
 .surah-card .sc-name { font-weight: 700; margin: 4px 0 2px; }
 .surah-card .sc-arabic { direction: rtl; font-size: 1.1rem; color: var(--muted); }
 .surah-card .sc-meta { font-size: 0.78rem; color: var(--muted); margin-top: 4px; }
-
-.location-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
-.manual-city-row { display: flex; gap: 8px; margin-top: 14px; }
-.manual-city-row input { flex: 1; }
-
-.prayer-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; margin: 14px 0; }
-.prayer-tile { background: var(--bg-elev); border-radius: 10px; padding: 12px; text-align: center; }
-.prayer-tile.next { background: rgba(47,168,138,0.15); border: 1px solid var(--accent); }
-.prayer-tile .p-name { font-size: 0.78rem; color: var(--muted); }
-.prayer-tile .p-time { font-size: 1.05rem; font-weight: 700; margin-top: 4px; }
-.next-prayer { font-weight: 600; color: var(--accent); }
-
-.masjid-list { display: flex; flex-direction: column; gap: 12px; }
-.masjid-card .masjid-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
-.masjid-name { margin: 0; }
-.masjid-schedule-view { margin-top: 10px; white-space: pre-wrap; font-size: 0.9rem; color: var(--muted); }
-.masjid-schedule-view:empty::before { content: "No schedule added yet — click Edit to add Jumu'ah time, classes, etc."; font-style: italic; }
-.masjid-schedule-input, .masjid-address-input, .masjid-link-input {
-  width: 100%; margin-top: 10px; padding: 10px; border-radius: 10px; border: 1px solid var(--border);
-  background: var(--bg-elev); color: var(--text); font-family: inherit; font-size: 0.9rem;
-}
-.masjid-edit-actions { display: flex; gap: 8px; margin-top: 8px; }
-.masjid-distance { display: block; margin-top: 2px; color: var(--accent); font-size: 0.8rem; }
-.masjid-link { display: inline-block; margin-top: 8px; color: var(--accent); font-size: 0.85rem; }
 
 .settings-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .settings-row:last-child { border-bottom: none; }

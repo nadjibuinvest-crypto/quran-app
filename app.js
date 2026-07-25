@@ -2,34 +2,11 @@
 const LS_KEYS = {
   plan: 'qa_plan',
   completed: 'qa_completed',
-  location: 'qa_location',
   reciter: 'qa_reciter',
-  masjids: 'qa_masjids',
   monthlyGoal: 'qa_monthly_goal'
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-// lat/lon below are verified via OpenStreetMap/Nominatim where found; masjids
-// without a match are left uncoordinated rather than guessed, and can be
-// geocoded from a user-entered address in the Masjid Events tab.
-const DEFAULT_MASJIDS = [
-  { id: 'epic', name: 'East Plano Islamic Center (EPIC)', city: 'Plano', lat: 33.0098876, lon: -96.6467684 },
-  { id: 'ianttx', name: 'Islamic Association of North Texas (Dallas Central Mosque)', city: 'Richardson' },
-  { id: 'ici', name: 'Islamic Center of Irving (ICI)', city: 'Irving' },
-  { id: 'vric', name: 'Valley Ranch Islamic Center (VRIC)', city: 'Irving', lat: 32.9172725, lon: -96.9478424 },
-  { id: 'iacc', name: 'Islamic Association of Collin County (Plano Masjid)', city: 'Plano' },
-  { id: 'icf', name: 'Islamic Center of Frisco', city: 'Frisco', lat: 33.1721923, lon: -96.8347665 },
-  { id: 'iatc', name: 'Islamic Association of Tarrant County (Fort Worth Masjid)', city: 'Fort Worth' },
-  { id: 'dfwic', name: 'Dallas-Fort Worth Islamic Center', city: 'Fort Worth' },
-  { id: 'ica', name: 'Islamic Center of Arlington', city: 'Arlington' },
-  { id: 'gpm', name: 'Grand Prairie Masjid (Islamic Services Foundation)', city: 'Grand Prairie' },
-  { id: 'dmai', name: 'Dallas Masjid of Al-Islam', city: 'Downtown Dallas', lat: 32.7668737, lon: -96.7786768 },
-  { id: 'icsd', name: 'Islamic Center of South Dallas (Masjid Al-Wali)', city: 'Dallas' },
-  { id: 'iqra', name: 'IQRA Masjid (Islamic Center of Quad Cities)', city: 'Allen' },
-  { id: 'mar', name: 'Masjid Al-Rahman (Islamic Association of Lewisville/Flower Mound)', city: 'Flower Mound', lat: 33.0354194, lon: -97.0830237 },
-  { id: 'icm', name: 'Islamic Center of McKinney', city: 'McKinney' }
-];
 
 let surahListCache = null;
 let currentSurahData = null; // { arabic, translation } for the surah currently in Learn tab
@@ -57,35 +34,10 @@ function formatLocalDate(d) {
 function todayStr() {
   return formatLocalDate(new Date());
 }
-function haversineMiles(lat1, lon1, lat2, lon2) {
-  const R = 3958.8; // Earth radius in miles
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+function dayOfYear(d) {
+  const start = new Date(d.getFullYear(), 0, 0);
+  return Math.floor((d - start) / DAY_MS);
 }
-
-async function geocodeZip(zip) {
-  const res = await fetch(`https://api.zippopotam.us/us/${encodeURIComponent(zip)}`);
-  if (!res.ok) throw new Error('ZIP not found');
-  const data = await res.json();
-  const place = data.places[0];
-  return {
-    lat: parseFloat(place.latitude),
-    lon: parseFloat(place.longitude),
-    zip,
-    label: `${place['place name']}, ${place['state abbreviation']} ${zip}`
-  };
-}
-
-async function geocodeAddress(query) {
-  const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`);
-  const data = await res.json();
-  if (!data.length) return null;
-  return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
-}
-
 function daysSince(dateStr) {
   const start = new Date(dateStr + 'T00:00:00');
   const now = new Date();
@@ -103,9 +55,7 @@ function initTabs() {
 function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
-  if (tab === 'prayer') renderPrayerTab();
   if (tab === 'progress') renderProgressTab();
-  if (tab === 'masjids') renderMasjidsTab();
 }
 
 // ---------- Surah data (alquran.cloud) ----------
@@ -125,6 +75,63 @@ async function getSurahText(number) {
   const ar = await arRes.json();
   const en = await enRes.json();
   return { arabic: ar.data, translation: en.data };
+}
+
+// ---------- Ayah of the Day (Motivation) ----------
+// Each entry references a real ayah (fetched live for accurate Arabic/translation)
+// plus a short, well-known theme/story so nothing here is guessed or fabricated.
+const DAILY_AYAHS = [
+  { ref: '94:5', theme: 'Revealed to comfort the Prophet ﷺ during a hard period — a reminder that ease follows hardship.', youtube: 'Surah Ash-Sharh Al-Inshirah explanation story' },
+  { ref: '2:286', theme: 'Allah does not burden a soul beyond what it can bear.', youtube: 'Surah Al-Baqarah 286 tafsir explanation' },
+  { ref: '13:28', theme: 'Hearts find rest in the remembrance of Allah.', youtube: 'Surah Ar-Rad 28 tafsir explanation' },
+  { ref: '39:53', theme: 'Allah forgives all sins — never despair of His mercy.', youtube: 'Surah Az-Zumar 53 tafsir explanation' },
+  { ref: '65:3', theme: 'Whoever relies on Allah, He is sufficient for them.', youtube: 'Surah At-Talaq 3 tafsir explanation' },
+  { ref: '21:87', theme: "Prophet Yunus's (Jonah's) dua from inside the whale — after which Allah saved him.", youtube: 'story of Prophet Yunus and the whale Quran' },
+  { ref: '12:87', theme: "From the story of Prophet Yusuf (Joseph) — his father's reminder not to lose hope in Allah's mercy.", youtube: 'story of Prophet Yusuf Quran explained' },
+  { ref: '20:25', theme: "Prophet Musa's (Moses') dua for ease before confronting Pharaoh.", youtube: 'story of Prophet Musa and Pharaoh Quran' },
+  { ref: '18:10', theme: 'The dua of the young men who took refuge in the cave (Ashab al-Kahf).', youtube: 'story of the People of the Cave Ashab al Kahf Quran' },
+  { ref: '9:40', theme: "The Hijra cave story — the Prophet ﷺ and Abu Bakr, and Allah's promise of aid.", youtube: 'story of the cave Hijra Prophet Muhammad Abu Bakr' },
+  { ref: '3:139', theme: 'A call not to weaken or grieve — believers are honored when faith is firm.', youtube: 'Surah Al Imran 139 tafsir explanation' },
+  { ref: '94:1', theme: 'Allah reminds the Prophet ﷺ of the expansion and relief given to his heart.', youtube: 'Surah Ash-Sharh Al-Inshirah explanation' },
+  { ref: '2:216', theme: 'You may dislike a thing which is good for you — trusting Allah\'s plan.', youtube: 'Surah Al-Baqarah 216 tafsir explanation' },
+  { ref: '55:13', theme: 'The refrain of Surah Ar-Rahman — counting Allah\'s countless favors.', youtube: 'Surah Ar-Rahman explained favors' },
+  { ref: '16:97', theme: 'Righteous deeds, by male or female, are rewarded with a good life.', youtube: 'Surah An-Nahl 97 tafsir explanation' },
+  { ref: '3:26', theme: 'Recognizing Allah as the sole owner of all sovereignty.', youtube: 'Surah Al Imran 26 tafsir explanation' },
+  { ref: '17:23', theme: 'A command of kindness and mercy toward parents.', youtube: 'Surah Al-Isra 23 tafsir kindness to parents' },
+  { ref: '49:13', theme: 'Humanity made into nations and tribes to know one another — nobility is in righteousness.', youtube: 'Surah Al-Hujurat 13 tafsir explanation' },
+  { ref: '2:153', theme: 'Seeking help through patience and prayer.', youtube: 'Surah Al-Baqarah 153 patience and prayer' },
+  { ref: '24:35', theme: 'Ayat an-Nur — Allah described as the Light of the heavens and the earth.', youtube: 'Ayat an Nur verse of light explained' }
+];
+
+async function getAyahText(ref) {
+  const [arRes, enRes] = await Promise.all([
+    fetch(`https://api.alquran.cloud/v1/ayah/${ref}/quran-uthmani`),
+    fetch(`https://api.alquran.cloud/v1/ayah/${ref}/en.asad`)
+  ]);
+  const ar = await arRes.json();
+  const en = await enRes.json();
+  return { arabic: ar.data, translation: en.data };
+}
+
+async function renderAyahOfTheDay() {
+  const idx = dayOfYear(new Date()) % DAILY_AYAHS.length;
+  const entry = DAILY_AYAHS[idx];
+  try {
+    const { arabic, translation } = await getAyahText(entry.ref);
+    document.getElementById('quote-arabic').textContent = arabic.text;
+    document.getElementById('quote-translation').textContent = translation.text;
+    document.getElementById('quote-reference').textContent =
+      `Surah ${arabic.surah.englishName} (${arabic.surah.name}) — Ayah ${arabic.numberInSurah}`;
+    document.getElementById('quote-story').textContent = entry.theme;
+    const ytLink = document.getElementById('quote-youtube-link');
+    ytLink.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(entry.youtube)}`;
+    ytLink.hidden = false;
+  } catch (e) {
+    document.getElementById('quote-arabic').textContent = '';
+    document.getElementById('quote-translation').textContent = 'Could not load today\'s ayah — check your internet connection.';
+    document.getElementById('quote-reference').textContent = '';
+    document.getElementById('quote-story').textContent = '';
+  }
 }
 
 // ---------- All Surahs Tab ----------
@@ -332,96 +339,123 @@ function initLearnActions() {
 }
 
 // ---------- Accountability: recitation-check gate (day 14) ----------
+// No browser on iOS supports real speech-to-text (Apple doesn't ship the Web
+// Speech API to any iOS browser engine), so there is no reliable way to
+// auto-grade recitation accuracy client-side. Instead, this enforces that the
+// full recording is actually listened to — not just skipped to the end —
+// before the confirmation checkbox unlocks.
 let mediaRecorder = null;
 let recordedChunks = [];
-let speechRecognizer = null;
-let recognizedTranscript = '';
+let recordingDuration = 0;
+let listenedSeconds = 0;
+let listenTickInterval = null;
+let lastTickTime = null;
 
 function resetRecitationUI() {
   const audioEl = document.getElementById('recitation-audio');
   const recordBtn = document.getElementById('btn-record-recitation');
-  const scoreNote = document.getElementById('recitation-score-note');
+  const listenNote = document.getElementById('recitation-listen-note');
+  const checkbox = document.getElementById('recitation-confirm-checkbox');
   audioEl.hidden = true;
   audioEl.removeAttribute('src');
   recordBtn.textContent = '🎙️ Start Recording';
   recordBtn.disabled = false;
-  scoreNote.hidden = true;
-  scoreNote.textContent = '';
+  listenNote.hidden = true;
+  listenNote.textContent = '';
+  recordingDuration = 0;
+  listenedSeconds = 0;
+  clearInterval(listenTickInterval);
+  const plan = loadJSON(LS_KEYS.plan, null);
+  if (!plan || !plan.recitationConfirmed) checkbox.disabled = true;
 }
 
-function normalizeArabic(text) {
-  return (text || '')
-    .replace(/[ً-ٟؐ-ؚۖ-ٰۭ]/g, '') // strip tashkeel
-    .replace(/[آأإٱ]/g, 'ا') // normalize alef forms
-    .replace(/ى/g, 'ي') // alef maksura -> ya
-    .replace(/[^؀-ۿ\s]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+// Attaches listen-progress tracking to the recitation audio element exactly
+// once. recordingDuration/listenedSeconds are module-level state reset on
+// each new recording, so the same listeners work across "Record Again" cycles
+// without piling up duplicate handlers on the persistent DOM node.
+function attachListenTracking(audio) {
+  const updateNote = () => {
+    const listenNote = document.getElementById('recitation-listen-note');
+    if (!recordingDuration) return;
+    listenNote.hidden = false;
+    const pct = Math.min(100, Math.round((listenedSeconds / recordingDuration) * 100));
+    listenNote.textContent = `Listened ${Math.round(listenedSeconds)}s of ${Math.round(recordingDuration)}s (${pct}%) — listen to the whole thing to unlock confirmation.`;
+  };
 
-function scoreTranscriptAgainstSurah(transcript) {
-  if (!currentSurahData) return null;
-  const fullText = currentSurahData.arabic.ayahs.map(a => a.text).join(' ');
-  const surahWords = normalizeArabic(fullText).split(' ').filter(Boolean);
-  const heardWords = new Set(normalizeArabic(transcript).split(' ').filter(Boolean));
-  if (!surahWords.length) return null;
-  const matched = surahWords.filter(w => heardWords.has(w)).length;
-  return Math.round((matched / surahWords.length) * 100);
+  const checkUnlock = () => {
+    if (recordingDuration > 0 && listenedSeconds >= recordingDuration * 0.9) {
+      document.getElementById('recitation-confirm-checkbox').disabled = false;
+      document.getElementById('recitation-listen-note').textContent = '✓ Full recording heard — you can confirm below.';
+    }
+  };
+
+  audio.addEventListener('loadedmetadata', () => {
+    if (!isFinite(audio.duration)) {
+      // Blob-recorded audio sometimes reports Infinity duration until forced to seek.
+      audio.currentTime = 1e101;
+      audio.addEventListener('timeupdate', function fixOnce() {
+        audio.removeEventListener('timeupdate', fixOnce);
+        audio.currentTime = 0;
+        recordingDuration = isFinite(audio.duration) ? audio.duration : 0;
+        updateNote();
+      });
+    } else {
+      recordingDuration = audio.duration;
+      updateNote();
+    }
+  });
+
+  audio.addEventListener('play', () => {
+    lastTickTime = Date.now();
+    clearInterval(listenTickInterval);
+    listenTickInterval = setInterval(() => {
+      const now = Date.now();
+      const delta = (now - lastTickTime) / 1000;
+      lastTickTime = now;
+      if (!audio.paused && !audio.seeking) listenedSeconds += delta;
+      updateNote();
+      checkUnlock();
+    }, 250);
+  });
+  audio.addEventListener('pause', () => clearInterval(listenTickInterval));
+  audio.addEventListener('ended', () => { clearInterval(listenTickInterval); checkUnlock(); });
 }
 
 function initRecitationActions() {
   const recordBtn = document.getElementById('btn-record-recitation');
   const audioEl = document.getElementById('recitation-audio');
   const checkbox = document.getElementById('recitation-confirm-checkbox');
-  const scoreNote = document.getElementById('recitation-score-note');
+  attachListenTracking(audioEl);
 
   recordBtn.addEventListener('click', async () => {
     if (mediaRecorder && mediaRecorder.state === 'recording') {
       mediaRecorder.stop();
-      if (speechRecognizer) speechRecognizer.stop();
       return;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       recordedChunks = [];
-      recognizedTranscript = '';
       mediaRecorder = new MediaRecorder(stream);
       mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
       mediaRecorder.onstop = () => {
+        recordingDuration = 0;
+        listenedSeconds = 0;
         const blob = new Blob(recordedChunks, { type: 'audio/webm' });
         audioEl.src = URL.createObjectURL(blob);
         audioEl.hidden = false;
         stream.getTracks().forEach(t => t.stop());
         recordBtn.textContent = '🎙️ Record Again';
         recordBtn.disabled = false;
-        checkbox.disabled = false;
-
-        if (recognizedTranscript) {
-          const score = scoreTranscriptAgainstSurah(recognizedTranscript);
-          if (score !== null) {
-            scoreNote.hidden = false;
-            scoreNote.textContent = `Best-effort speech match: ~${score}% of the surah's words were recognized. This is not a certified grade — trust your own listen-back over this number.`;
-          }
+        checkbox.disabled = true;
+        checkbox.checked = false;
+        const plan = loadJSON(LS_KEYS.plan, null);
+        if (plan) {
+          plan.recitationConfirmed = false;
+          saveJSON(LS_KEYS.plan, plan);
+          document.getElementById('btn-finish-surah').disabled = true;
+          document.getElementById('finish-helper').textContent = 'Complete the recitation check below to unlock this.';
         }
       };
-
-      const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (SpeechRecognitionCtor) {
-        speechRecognizer = new SpeechRecognitionCtor();
-        speechRecognizer.lang = 'ar-SA';
-        speechRecognizer.continuous = true;
-        speechRecognizer.interimResults = false;
-        speechRecognizer.onresult = (e) => {
-          for (let i = e.resultIndex; i < e.results.length; i++) {
-            recognizedTranscript += ' ' + e.results[i][0].transcript;
-          }
-        };
-        speechRecognizer.onerror = () => {};
-        try { speechRecognizer.start(); } catch (e) { speechRecognizer = null; }
-      } else {
-        speechRecognizer = null;
-      }
-
       mediaRecorder.start();
       recordBtn.textContent = '⏹ Stop Recording';
     } catch (e) {
@@ -634,226 +668,6 @@ function initProgressActions() {
   });
 }
 
-// ---------- Prayer Times Tab ----------
-async function renderPrayerTab() {
-  const loc = loadJSON(LS_KEYS.location, null);
-  const display = document.getElementById('location-display');
-  const timesCard = document.getElementById('prayer-times-card');
-
-  if (!loc) {
-    display.textContent = 'No location set — trying to detect automatically…';
-    tryAutoLocation();
-    return;
-  }
-  display.textContent = loc.label || `${loc.lat.toFixed(3)}, ${loc.lon.toFixed(3)}`;
-  await loadPrayerTimes(loc);
-  timesCard.hidden = false;
-}
-
-async function loadPrayerTimes(loc) {
-  try {
-    let url;
-    if (loc.city) {
-      url = `https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(loc.city)}&country=${encodeURIComponent(loc.country || '')}&method=2`;
-    } else {
-      url = `https://api.aladhan.com/v1/timings?latitude=${loc.lat}&longitude=${loc.lon}&method=2`;
-    }
-    const res = await fetch(url);
-    const data = await res.json();
-    const timings = data.data.timings;
-    const tz = data.data.meta && data.data.meta.timezone;
-    const order = ['Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'];
-    const grid = document.getElementById('prayer-grid');
-    grid.innerHTML = '';
-
-    // Compute "now" in the queried location's timezone, not the browser's.
-    const nowLocal = tz
-      ? new Date(new Date().toLocaleString('en-US', { timeZone: tz }))
-      : new Date();
-    let nextName = null, nextDiffMin = Infinity;
-    order.forEach(name => {
-      const [h, m] = timings[name].split(':').map(Number);
-      const t = new Date(nowLocal);
-      t.setHours(h, m, 0, 0);
-      const diffMin = (t - nowLocal) / 60000;
-      if (diffMin > 0 && diffMin < nextDiffMin) { nextDiffMin = diffMin; nextName = name; }
-    });
-
-    order.forEach(name => {
-      const tile = document.createElement('div');
-      tile.className = 'prayer-tile' + (name === nextName ? ' next' : '');
-      tile.innerHTML = `<div class="p-name">${name}</div><div class="p-time">${timings[name]}</div>`;
-      grid.appendChild(tile);
-    });
-
-    document.getElementById('prayer-date').textContent = data.data.date.readable;
-    document.getElementById('next-prayer-line').textContent = nextName
-      ? `Next: ${nextName} in about ${Math.round(nextDiffMin)} min`
-      : `All prayers passed for today — Fajr is next, tomorrow.`;
-    document.getElementById('prayer-times-card').hidden = false;
-  } catch (e) {
-    document.getElementById('prayer-times-card').hidden = true;
-    document.getElementById('location-display').textContent = 'Could not load prayer times. Check your internet connection.';
-  }
-}
-
-function tryAutoLocation() {
-  if (!navigator.geolocation) {
-    document.getElementById('location-display').textContent = 'Geolocation not supported — please type your city below.';
-    return;
-  }
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      const loc = { lat: pos.coords.latitude, lon: pos.coords.longitude, label: 'Your current location' };
-      saveJSON(LS_KEYS.location, loc);
-      renderPrayerTab();
-    },
-    () => {
-      document.getElementById('location-display').textContent = 'Location permission denied — please type your city below.';
-    },
-    { timeout: 8000 }
-  );
-}
-
-function initPrayerActions() {
-  document.getElementById('btn-use-location').addEventListener('click', tryAutoLocation);
-  document.getElementById('btn-set-zip').addEventListener('click', async () => {
-    const zip = document.getElementById('manual-zip').value.trim();
-    if (!zip) return;
-    const display = document.getElementById('location-display');
-    display.textContent = 'Looking up ZIP code…';
-    try {
-      const loc = await geocodeZip(zip);
-      saveJSON(LS_KEYS.location, loc);
-      renderPrayerTab();
-      renderMasjidsTab();
-    } catch (e) {
-      display.textContent = 'Could not find that ZIP code — please check it and try again.';
-    }
-  });
-}
-
-// ---------- Masjid Events Tab ----------
-const MASJID_RADIUS_MILES = 70;
-
-function getMasjidEntry(stored, id) {
-  const raw = stored[id];
-  if (!raw) return { schedule: '', address: '', link: '' };
-  if (typeof raw === 'string') return { schedule: raw, address: '', link: '' }; // legacy format
-  return { schedule: raw.schedule || '', address: raw.address || '', link: raw.link || '', lat: raw.lat, lon: raw.lon };
-}
-
-function renderMasjidsTab() {
-  const stored = loadJSON(LS_KEYS.masjids, {});
-  const container = document.getElementById('masjid-list');
-  const template = document.getElementById('masjid-card-template');
-  const loc = loadJSON(LS_KEYS.location, null);
-  const zipInput = document.getElementById('masjid-zip');
-  const zipStatus = document.getElementById('masjid-zip-status');
-  container.innerHTML = '';
-
-  if (loc && loc.zip) zipInput.value = loc.zip;
-  zipStatus.textContent = loc && loc.lat
-    ? `Sorted by distance from ${loc.label || 'your location'}. Masjids over ${MASJID_RADIUS_MILES} miles away with a known address are hidden.`
-    : 'Enter your ZIP code to sort by distance and filter to within 70 miles.';
-
-  const withDist = DEFAULT_MASJIDS.map(m => {
-    const entry = getMasjidEntry(stored, m.id);
-    const lat = entry.lat ?? m.lat;
-    const lon = entry.lon ?? m.lon;
-    const dist = (loc && loc.lat && lat != null) ? haversineMiles(loc.lat, loc.lon, lat, lon) : null;
-    return { m, entry, lat, lon, dist };
-  }).filter(x => x.dist === null || x.dist <= MASJID_RADIUS_MILES)
-    .sort((a, b) => {
-      if (a.dist === null && b.dist === null) return 0;
-      if (a.dist === null) return 1;
-      if (b.dist === null) return -1;
-      return a.dist - b.dist;
-    });
-
-  withDist.forEach(({ m, entry, lat, lon, dist }) => {
-    const node = template.content.cloneNode(true);
-    node.querySelector('.masjid-name').textContent = m.name;
-    node.querySelector('.masjid-city').textContent = m.city + ', TX';
-    node.querySelector('.masjid-distance').textContent = dist !== null ? ` · ${dist.toFixed(1)} mi away` : ' · distance unknown (add address)';
-
-    const linkEl = node.querySelector('.masjid-link');
-    if (entry.link) {
-      linkEl.href = /^https?:\/\//.test(entry.link) ? entry.link : `https://${entry.link}`;
-      linkEl.textContent = '🔗 ' + entry.link;
-      linkEl.hidden = false;
-    }
-
-    const viewEl = node.querySelector('.masjid-schedule-view');
-    const editEl = node.querySelector('.masjid-schedule-edit');
-    const scheduleInput = node.querySelector('.masjid-schedule-input');
-    const addressInput = node.querySelector('.masjid-address-input');
-    const linkInput = node.querySelector('.masjid-link-input');
-    viewEl.textContent = entry.schedule;
-    scheduleInput.value = entry.schedule;
-    addressInput.value = entry.address;
-    linkInput.value = entry.link;
-
-    node.querySelector('.btn-edit-masjid').addEventListener('click', () => {
-      viewEl.hidden = true;
-      editEl.hidden = false;
-    });
-    node.querySelector('.btn-cancel-masjid').addEventListener('click', () => {
-      scheduleInput.value = entry.schedule;
-      addressInput.value = entry.address;
-      linkInput.value = entry.link;
-      viewEl.hidden = false;
-      editEl.hidden = true;
-    });
-    const saveBtn = node.querySelector('.btn-save-masjid');
-    saveBtn.addEventListener('click', async () => {
-      const newAddress = addressInput.value.trim();
-      const all = loadJSON(LS_KEYS.masjids, {});
-      const prev = getMasjidEntry(all, m.id);
-      const updated = {
-        schedule: scheduleInput.value.trim(),
-        address: newAddress,
-        link: linkInput.value.trim(),
-        lat: prev.lat, lon: prev.lon
-      };
-      if (newAddress && newAddress !== prev.address) {
-        saveBtn.textContent = 'Looking up address…';
-        saveBtn.disabled = true;
-        try {
-          const coords = await geocodeAddress(`${newAddress}`);
-          if (coords) { updated.lat = coords.lat; updated.lon = coords.lon; }
-        } catch (e) { /* keep previous coords if lookup fails */ }
-        saveBtn.textContent = 'Save';
-        saveBtn.disabled = false;
-      } else if (!newAddress) {
-        updated.lat = undefined;
-        updated.lon = undefined;
-      }
-      all[m.id] = updated;
-      saveJSON(LS_KEYS.masjids, all);
-      renderMasjidsTab();
-    });
-
-    container.appendChild(node);
-  });
-}
-
-function initMasjidActions() {
-  document.getElementById('btn-masjid-zip').addEventListener('click', async () => {
-    const zip = document.getElementById('masjid-zip').value.trim();
-    if (!zip) return;
-    const status = document.getElementById('masjid-zip-status');
-    status.textContent = 'Looking up ZIP code…';
-    try {
-      const loc = await geocodeZip(zip);
-      saveJSON(LS_KEYS.location, loc);
-      renderMasjidsTab();
-    } catch (e) {
-      status.textContent = 'Could not find that ZIP code — please check it and try again.';
-    }
-  });
-}
-
 // ---------- Settings Tab ----------
 function updateSettingsSummary() {
   const plan = loadJSON(LS_KEYS.plan, null);
@@ -913,13 +727,10 @@ if ('serviceWorker' in navigator) {
 window.addEventListener('DOMContentLoaded', () => {
   initTabs();
   initLearnActions();
-  initPrayerActions();
   initSettingsActions();
   initProgressActions();
-  initMasjidActions();
   renderLearnTab();
   renderSurahsTab();
-  renderMasjidsTab();
+  renderAyahOfTheDay();
   updateSettingsSummary();
-  tryAutoLocation();
 });
