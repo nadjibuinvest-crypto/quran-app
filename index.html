@@ -209,12 +209,20 @@
             <option value="Yasser Al-Dosari">Yasser Al-Dosari</option>
           </select>
         </div>
+        <div class="settings-row" style="flex-direction:column; align-items:flex-start;">
+          <div style="margin-bottom:10px;">
+            <strong>Test your microphone</strong>
+            <p class="muted">Quick check that recording works on this device — not tied to any surah, doesn't affect your progress.</p>
+          </div>
+          <button id="btn-test-mic" class="btn secondary">🎙️ Start Test Recording</button>
+          <audio id="test-mic-audio" controls style="width:100%; margin-top:10px;" hidden></audio>
+        </div>
       </div>
     </section>
 
   </main>
 </div>
 
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

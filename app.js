@@ -68,13 +68,15 @@ async function getSurahList() {
 }
 
 async function getSurahText(number) {
-  const [arRes, enRes] = await Promise.all([
+  const [arRes, enRes, transRes] = await Promise.all([
     fetch(`https://api.alquran.cloud/v1/surah/${number}/quran-uthmani`),
-    fetch(`https://api.alquran.cloud/v1/surah/${number}/en.asad`)
+    fetch(`https://api.alquran.cloud/v1/surah/${number}/en.asad`),
+    fetch(`https://api.alquran.cloud/v1/surah/${number}/en.transliteration`)
   ]);
   const ar = await arRes.json();
   const en = await enRes.json();
-  return { arabic: ar.data, translation: en.data };
+  const trans = await transRes.json();
+  return { arabic: ar.data, translation: en.data, transliteration: trans.data };
 }
 
 // ---------- Ayah of the Day (Motivation) ----------
@@ -275,8 +277,8 @@ async function renderLearnTab() {
   const versesList = document.getElementById('verses-list');
   versesList.innerHTML = '<p class="muted">Loading verses…</p>';
   try {
-    const { arabic, translation } = await getSurahText(plan.number);
-    currentSurahData = { arabic, translation };
+    const { arabic, translation, transliteration } = await getSurahText(plan.number);
+    currentSurahData = { arabic, translation, transliteration };
     versesList.innerHTML = '';
     arabic.ayahs.forEach((ayah, i) => {
       const inRange = ayah.numberInSurah >= today.from && ayah.numberInSurah <= today.to;
@@ -285,6 +287,7 @@ async function renderLearnTab() {
       item.innerHTML = `
         <span class="verse-num">Ayah ${ayah.numberInSurah}</span>
         <div class="verse-arabic">${ayah.text}</div>
+        <div class="verse-translit">${transliteration.ayahs[i].text}</div>
         <div class="verse-translation">${translation.ayahs[i].text}</div>
       `;
       versesList.appendChild(item);
@@ -714,6 +717,41 @@ function initSettingsActions() {
     saveJSON(LS_KEYS.plan, plan);
     renderLearnTab();
     updateSettingsSummary();
+  });
+
+  initMicTest();
+}
+
+// Standalone mic check — independent of the recitation gate's state, so
+// testing it never touches an in-progress surah's recitationConfirmed flag.
+function initMicTest() {
+  const btn = document.getElementById('btn-test-mic');
+  const audioEl = document.getElementById('test-mic-audio');
+  let testRecorder = null;
+  let testChunks = [];
+
+  btn.addEventListener('click', async () => {
+    if (testRecorder && testRecorder.state === 'recording') {
+      testRecorder.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      testChunks = [];
+      testRecorder = new MediaRecorder(stream);
+      testRecorder.ondataavailable = (e) => { if (e.data.size > 0) testChunks.push(e.data); };
+      testRecorder.onstop = () => {
+        const blob = new Blob(testChunks, { type: 'audio/webm' });
+        audioEl.src = URL.createObjectURL(blob);
+        audioEl.hidden = false;
+        stream.getTracks().forEach(t => t.stop());
+        btn.textContent = '🎙️ Record Again';
+      };
+      testRecorder.start();
+      btn.textContent = '⏹ Stop Recording';
+    } catch (e) {
+      alert('Could not access the microphone. Check that this site has microphone permission in your browser/phone settings.');
+    }
   });
 }
 
