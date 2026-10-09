@@ -1,6 +1,6 @@
 {
-  "name": "Learn Quran — 14 Day Surah Plan",
-  "short_name": "Learn Quran",
+  "name": "LP Quran",
+  "short_name": "LP Quran",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
