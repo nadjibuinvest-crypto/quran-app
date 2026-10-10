@@ -49,6 +49,10 @@ function fmtDuration(sec) {
   const rm = m % 60;
   return rm ? `${h} h ${rm} min` : `${h} h`;
 }
+// 'Meccan' and 'Medinan' are hard words, so say where the surah came down instead.
+function placeName(type) {
+  return type === 'Medinan' ? 'From Madinah' : 'From Makkah';
+}
 function el(tag, className, text) {
   const e = document.createElement(tag);
   if (className) e.className = className;
@@ -143,7 +147,7 @@ async function getSurahList() {
 async function getSurahText(number) {
   const [arRes, enRes, trRes] = await Promise.all([
     fetch(`https://api.alquran.cloud/v1/surah/${number}/quran-uthmani`),
-    fetch(`https://api.alquran.cloud/v1/surah/${number}/en.asad`),
+    fetch(`https://api.alquran.cloud/v1/surah/${number}/en.itani`),
     fetch(`https://api.alquran.cloud/v1/surah/${number}/en.transliteration`)
   ]);
   const [ar, en, tr] = await Promise.all([arRes.json(), enRes.json(), trRes.json()]);
@@ -171,36 +175,36 @@ async function getSimpleAyahs(n) {
   }
 }
 
-// ---------- Ayah of the Day (Motivation) ----------
-// Each entry references a real ayah (fetched live for accurate Arabic/translation)
-// plus a short, well-known theme/story so nothing here is guessed or fabricated.
+// ---------- Verse of the Day ----------
+// Each entry points to a real verse (loaded live so the Arabic is exact), then adds
+// what it means in simple words and one small thing to try today.
 const DAILY_AYAHS = [
-  { ref: '94:5', theme: 'Revealed to comfort the Prophet ﷺ during a hard period — a reminder that ease follows hardship.', youtube: 'Surah Ash-Sharh Al-Inshirah explanation story' },
-  { ref: '2:286', theme: 'Allah does not burden a soul beyond what it can bear.', youtube: 'Surah Al-Baqarah 286 tafsir explanation' },
-  { ref: '13:28', theme: 'Hearts find rest in the remembrance of Allah.', youtube: 'Surah Ar-Rad 28 tafsir explanation' },
-  { ref: '39:53', theme: 'Allah forgives all sins — never despair of His mercy.', youtube: 'Surah Az-Zumar 53 tafsir explanation' },
-  { ref: '65:3', theme: 'Whoever relies on Allah, He is sufficient for them.', youtube: 'Surah At-Talaq 3 tafsir explanation' },
-  { ref: '21:87', theme: "Prophet Yunus's (Jonah's) dua from inside the whale — after which Allah saved him.", youtube: 'story of Prophet Yunus and the whale Quran' },
-  { ref: '12:87', theme: "From the story of Prophet Yusuf (Joseph) — his father's reminder not to lose hope in Allah's mercy.", youtube: 'story of Prophet Yusuf Quran explained' },
-  { ref: '20:25', theme: "Prophet Musa's (Moses') dua for ease before confronting Pharaoh.", youtube: 'story of Prophet Musa and Pharaoh Quran' },
-  { ref: '18:10', theme: 'The dua of the young men who took refuge in the cave (Ashab al-Kahf).', youtube: 'story of the People of the Cave Ashab al Kahf Quran' },
-  { ref: '9:40', theme: "The Hijra cave story — the Prophet ﷺ and Abu Bakr, and Allah's promise of aid.", youtube: 'story of the cave Hijra Prophet Muhammad Abu Bakr' },
-  { ref: '3:139', theme: 'A call not to weaken or grieve — believers are honored when faith is firm.', youtube: 'Surah Al Imran 139 tafsir explanation' },
-  { ref: '94:1', theme: 'Allah reminds the Prophet ﷺ of the expansion and relief given to his heart.', youtube: 'Surah Ash-Sharh Al-Inshirah explanation' },
-  { ref: '2:216', theme: "You may dislike a thing which is good for you — trusting Allah's plan.", youtube: 'Surah Al-Baqarah 216 tafsir explanation' },
-  { ref: '55:13', theme: "The refrain of Surah Ar-Rahman — counting Allah's countless favors.", youtube: 'Surah Ar-Rahman explained favors' },
-  { ref: '16:97', theme: 'Righteous deeds, by male or female, are rewarded with a good life.', youtube: 'Surah An-Nahl 97 tafsir explanation' },
-  { ref: '3:26', theme: 'Recognizing Allah as the sole owner of all sovereignty.', youtube: 'Surah Al Imran 26 tafsir explanation' },
-  { ref: '17:23', theme: 'A command of kindness and mercy toward parents.', youtube: 'Surah Al-Isra 23 tafsir kindness to parents' },
-  { ref: '49:13', theme: 'Humanity made into nations and tribes to know one another — nobility is in righteousness.', youtube: 'Surah Al-Hujurat 13 tafsir explanation' },
-  { ref: '2:153', theme: 'Seeking help through patience and prayer.', youtube: 'Surah Al-Baqarah 153 patience and prayer' },
-  { ref: '24:35', theme: 'Ayat an-Nur — Allah described as the Light of the heavens and the earth.', youtube: 'Ayat an Nur verse of light explained' }
+  { ref: '94:5', story: 'Allah told the Prophet this when life was very hard for him.', meaning: 'Hard times do not last forever. Easy times come after them.', apply: 'Think of one hard thing in your life. Say: Allah, please make it easy. Then do one small thing to help today.', youtube: 'Surah Ash-Sharh Al-Inshirah explanation story' },
+  { ref: '2:286', meaning: 'Allah knows how strong you are. He never gives you more than you can carry.', apply: 'When something feels too hard, say: Allah knows I can do this. Then take one small step.', youtube: 'Surah Al-Baqarah 286 explanation' },
+  { ref: '13:28', meaning: 'When you remember Allah, your heart feels calm and safe.', apply: 'When you feel worried, say SubhanAllah ten times. Then notice how your heart feels.', youtube: 'Surah Ar-Rad 28 explanation' },
+  { ref: '39:53', meaning: 'Never give up hope. Whatever mistake you made, Allah can forgive you. Just come back to Him and say sorry.', apply: 'Is there something you feel bad about? Say sorry to Allah today. Promise to do better.', youtube: 'Surah Az-Zumar 53 explanation' },
+  { ref: '65:3', meaning: 'If you trust Allah, He is enough for you. He will take care of you.', apply: 'Pick one thing you worry about. Do your best. Then say: Hasbunallah. Allah is enough for me.', youtube: 'Surah At-Talaq 3 explanation' },
+  { ref: '21:87', story: 'Prophet Yunus was inside a big fish, in the dark sea. He said this dua. Allah heard him and saved him.', meaning: 'Even in the darkest place, Allah hears you.', apply: 'When you make a mistake, say this dua: La ilaha illa anta, subhanaka, inni kuntu minaz-zalimin.', youtube: 'story of Prophet Yunus and the whale Quran' },
+  { ref: '12:87', story: 'Prophet Yusuf was lost for many years. His father Yaqub was very sad, but he did not give up hope in Allah.', meaning: 'Never lose hope in Allah. He can fix things in ways you do not expect.', apply: 'Is there something you gave up on? Ask Allah for it again today.', youtube: 'story of Prophet Yusuf Quran explained' },
+  { ref: '20:25', story: 'Prophet Musa had to go and talk to a mean king named Pharaoh. He was scared, so he made this dua.', meaning: 'Ask Allah to make your heart calm before a hard job.', apply: 'Before a test, or before you speak in front of people, say: Rabbi ishrah li sadri, wa yassir li amri.', youtube: 'story of Prophet Musa and Pharaoh Quran' },
+  { ref: '18:10', story: 'Some young men ran to a cave to keep their faith safe. They made this dua.', meaning: 'Ask Allah for His kindness and for the right way.', apply: 'Before you sleep tonight, say this dua and ask Allah to make your way easy.', youtube: 'story of the People of the Cave Ashab al Kahf Quran' },
+  { ref: '9:40', story: 'The Prophet and his friend Abu Bakr hid in a cave. Abu Bakr was scared. The Prophet told him not to be sad, because Allah was with them.', meaning: 'Allah is with you when you are scared or alone.', apply: 'When you feel scared, say: La tahzan, innallaha ma-ana. Do not be sad. Allah is with us.', youtube: 'story of the cave Hijra Prophet Muhammad Abu Bakr' },
+  { ref: '3:139', meaning: 'Do not feel weak or sad. If you keep your faith strong, you will be on top.', apply: 'When something goes wrong today, take a deep breath and say: I will not give up.', youtube: 'Surah Al Imran 139 explanation' },
+  { ref: '94:1', meaning: 'Allah reminds the Prophet how He made his heart calm and took away his heavy worries. He can do this for you too.', apply: 'Think of three times Allah made things easy for you. Say Alhamdulillah for each one.', youtube: 'Surah Ash-Sharh Al-Inshirah explanation' },
+  { ref: '2:216', meaning: 'You might not like something, but it may be good for you. Allah knows more than you do.', apply: 'Think of something that happened that you did not like. Can you find one good thing in it?', youtube: 'Surah Al-Baqarah 216 explanation' },
+  { ref: '55:13', meaning: 'Allah asks: Which of My gifts can you say no to? We can never count all His gifts, like air, water, food and family.', apply: 'Name five gifts you have right now. Say Alhamdulillah for each one.', youtube: 'Surah Ar-Rahman explained favors' },
+  { ref: '16:97', meaning: 'Any boy or girl, man or woman, who believes and does good things, Allah will give a good and happy life.', apply: 'Do one good thing in secret today, only for Allah.', youtube: 'Surah An-Nahl 97 explanation' },
+  { ref: '3:26', meaning: 'Allah is the King of everything. He gives and He takes. Everything is in His hand.', apply: 'When you want something, ask Allah first. Make a dua.', youtube: 'Surah Al Imran 26 explanation' },
+  { ref: '17:23', meaning: 'Allah tells us to be very kind to our mom and dad. Even when they are old, never be rude to them.', apply: 'Say something kind to your mom or dad today, or make dua for them.', youtube: 'Surah Al-Isra 23 kindness to parents' },
+  { ref: '49:13', meaning: 'Allah made us into different groups so we can get to know each other. The best person is the one who obeys Allah the most.', apply: 'Say salaam and smile at someone new or different from you today.', youtube: 'Surah Al-Hujurat 13 explanation' },
+  { ref: '2:153', meaning: 'When things are hard, ask Allah for help with patience and prayer. Allah is with people who are patient.', apply: 'When you feel upset today, wait, breathe slowly, and pray two rakat.', youtube: 'Surah Al-Baqarah 153 patience and prayer' },
+  { ref: '24:35', meaning: 'Light helps us see. Allah is the Light of the sky and the earth. His Quran shows us the right way.', apply: 'Read or listen to one verse today. Ask yourself: What does Allah want me to do?', youtube: 'Ayat an Nur verse of light explained' }
 ];
 
 async function getAyahText(ref) {
   const [arRes, enRes] = await Promise.all([
     fetch(`https://api.alquran.cloud/v1/ayah/${ref}/quran-uthmani`),
-    fetch(`https://api.alquran.cloud/v1/ayah/${ref}/en.asad`)
+    fetch(`https://api.alquran.cloud/v1/ayah/${ref}/en.itani`)
   ]);
   const ar = await arRes.json();
   const en = await enRes.json();
@@ -210,21 +214,23 @@ async function getAyahText(ref) {
 async function renderAyahOfTheDay() {
   const idx = dayOfYear(new Date()) % DAILY_AYAHS.length;
   const entry = DAILY_AYAHS[idx];
+  // The simple words and the thing to try do not need the internet, so show them right away.
+  $('quote-meaning').textContent = entry.meaning;
+  $('quote-apply').textContent = entry.apply;
+  $('quote-story').textContent = entry.story || '';
+  $('quote-story').hidden = !entry.story;
+  const ytLink = $('quote-youtube-link');
+  ytLink.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(entry.youtube)}`;
+  ytLink.hidden = false;
   try {
     const { arabic, translation } = await getAyahText(entry.ref);
     $('quote-arabic').textContent = stripBismillah(arabic.text, arabic.surah.number, arabic.numberInSurah);
     $('quote-translation').textContent = translation.text;
-    $('quote-reference').textContent =
-      `Surah ${arabic.surah.englishName} (${arabic.surah.name}) — Ayah ${arabic.numberInSurah}`;
-    $('quote-story').textContent = entry.theme;
-    const ytLink = $('quote-youtube-link');
-    ytLink.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(entry.youtube)}`;
-    ytLink.hidden = false;
+    $('quote-reference').textContent = `From Surah ${arabic.surah.englishName}, verse ${arabic.numberInSurah}`;
   } catch (e) {
     $('quote-arabic').textContent = '';
-    $('quote-translation').textContent = "Could not load today's ayah — check your internet connection.";
+    $('quote-translation').textContent = 'Could not load the verse. Check your internet.';
     $('quote-reference').textContent = '';
-    $('quote-story').textContent = '';
   }
 }
 
@@ -248,13 +254,13 @@ async function renderSurahGrid() {
       const top = el('div', 'sc-top');
       top.append(el('span', 'sc-num', `#${s.number}`), el('span', 'sc-arabic', s.name));
       card.append(top, el('div', 'sc-name', s.englishName), el('div', 'muted', s.englishNameTranslation));
-      card.append(el('div', 'sc-meta', `${s.numberOfAyahs} verses · ${s.revelationType}`));
+      card.append(el('div', 'sc-meta', `${s.numberOfAyahs} verses · ${placeName(s.revelationType)}`));
       if (st.learnedOn) card.append(el('span', 'chip chip-done', '✓ Learned'));
       else if (st.listenSeconds > 0) card.append(el('span', 'chip', 'Practicing'));
       card.addEventListener('click', () => openSurah(s.number));
       container.appendChild(card);
     });
-    if (!container.children.length) container.append(el('p', 'muted', 'No surah matches that search.'));
+    if (!container.children.length) container.append(el('p', 'muted', 'No surah found. Try a different name.'));
   } catch (e) {
     container.innerHTML = '<p class="muted">Could not load surah list. Check your internet connection.</p>';
   }
@@ -299,13 +305,13 @@ async function renderStudy() {
     ? `${n}. ${meta.englishName} — ${meta.englishNameTranslation}`
     : `${n}. ${name}`;
   $('learn-surah-arabic').textContent = meta ? meta.name : state.arabicName;
-  $('learn-surah-meta').textContent = meta ? `${meta.numberOfAyahs} verses · ${meta.revelationType}` : '';
+  $('learn-surah-meta').textContent = meta ? `${meta.numberOfAyahs} verses · ${placeName(meta.revelationType)}` : '';
 
   // About: plain-English summary, then the reflection questions.
   let info = null;
   try { info = await getSurahInfo(n); } catch (e) { /* shown as fallback text below */ }
   if (token !== renderToken) return;
-  $('about-summary').textContent = info ? info.summary : 'The summary could not be loaded. Check your connection and try again.';
+  $('about-summary').textContent = info ? info.summary : 'The summary could not load. Check your internet and try again.';
   renderReflections(n, info ? info.questions : [], state.reflections);
 
   // Your own words, level, practice stats
@@ -351,7 +357,7 @@ async function renderStudy() {
   const hasSimple = Array.isArray(simple) && simple.length === count;
   if (!hasSimple) {
     note.hidden = false;
-    note.textContent = 'Simple explanations for each verse are not written for this surah yet. Use the summary above and the translation below.';
+    note.textContent = 'Simple words for each verse are not ready for this surah yet. Read the summary above.';
   }
   list.innerHTML = '';
   text.arabic.ayahs.forEach((ayah, i) => {
@@ -412,7 +418,7 @@ function renderPracticeStats(n) {
   const s = getState(n);
   $('practice-stats').textContent = s.listenSeconds || s.repeats
     ? `Practice time: ${fmtDuration(s.listenSeconds)} · Repeated ${s.repeats} ${s.repeats === 1 ? 'time' : 'times'}`
-    : 'Press play. Your practice time and repeats will be counted here.';
+    : 'Press play. Your practice time and repeats will show here.';
 }
 
 function renderLoopButton() {
@@ -531,13 +537,13 @@ function attachListenTracking(audio) {
     if (!recordingDuration) return;
     note.hidden = false;
     const pct = Math.min(100, Math.round((listenedSeconds / recordingDuration) * 100));
-    note.textContent = `Listened ${Math.round(listenedSeconds)}s of ${Math.round(recordingDuration)}s (${pct}%). Listen to the whole thing to unlock the confirmation.`;
+    note.textContent = `You listened ${Math.round(listenedSeconds)} sec of ${Math.round(recordingDuration)} sec (${pct}%). Listen to all of it to go on.`;
   };
 
   const checkUnlock = () => {
     if (recordingDuration > 0 && listenedSeconds >= recordingDuration * 0.9) {
       $('recitation-confirm-checkbox').disabled = false;
-      $('recitation-listen-note').textContent = '✓ Full recording heard. You can confirm below.';
+      $('recitation-listen-note').textContent = '✓ You listened to all of it. You can check the box below.';
     }
   };
 
@@ -619,7 +625,7 @@ function initRecitationActions() {
       recordBtn.textContent = '⏹ Stop Recording';
     } catch (e) {
       recordBtn.textContent = '🎙️ Start Recording';
-      alert('Microphone access is needed to record your recitation. Please allow microphone permission and try again.');
+      alert('The microphone is needed to record. Please allow the microphone and try again.');
     }
   });
 
@@ -668,7 +674,7 @@ async function renderWins() {
   const thisMonth = learned.filter(e => e.learnedOn.startsWith(monthKey)).length;
   $('month-progress-fill').style.width = `${Math.min(100, (thisMonth / goal) * 100)}%`;
   $('month-progress-text').textContent = thisMonth >= goal
-    ? `🎉 Goal reached: ${thisMonth} learned this month`
+    ? `🎉 Goal done: ${thisMonth} learned this month`
     : `${thisMonth} of ${goal} learned this month`;
 
   let names = null;
@@ -719,7 +725,7 @@ function initSettingsActions() {
   });
 
   $('btn-reset-all').addEventListener('click', () => {
-    if (!confirm('Erase all your notes, wins and practice time from this phone? This cannot be undone.')) return;
+    if (!confirm('Delete all your notes, wins and practice time from this phone? You cannot undo this.')) return;
     Object.values(LS).forEach(k => localStorage.removeItem(k));
     OLD_KEYS.forEach(k => localStorage.removeItem(k));
     $('audio-player').pause();
@@ -759,7 +765,7 @@ function initMicTest() {
       testRecorder.start();
       btn.textContent = '⏹ Stop Recording';
     } catch (e) {
-      alert('Could not access the microphone. Check that this site has microphone permission in your browser/phone settings.');
+      alert('Could not use the microphone. Check that this site is allowed to use the microphone in your phone settings.');
     }
   });
 }

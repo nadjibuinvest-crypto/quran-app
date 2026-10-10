@@ -184,3 +184,7 @@ main { padding: 18px; }
   .plan-header { flex-direction: column; align-items: flex-start; }
   .verse-arabic { font-size: 1.3rem; }
 }
+
+.quote-label { margin: 12px 0 4px; font-size: 0.78rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.quote-apply { margin-top: 14px; padding: 12px 14px; border-radius: 10px; background: rgba(47,168,138,0.12); border-left: 3px solid var(--accent); line-height: 1.5; }
+.quote-apply b { color: var(--accent); }

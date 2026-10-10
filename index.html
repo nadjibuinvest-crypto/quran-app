@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LP Quran</title>
-<link rel="stylesheet" href="styles.css?v=5">
+<link rel="stylesheet" href="styles.css?v=6">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1a2530">
 <link rel="icon" href="icons/icon-32.png" sizes="32x32">
@@ -32,12 +32,16 @@
     <section id="tab-learn" class="tab-panel active">
 
       <div class="card quote-card">
-        <h3>✨ Motivation — Ayah of the Day</h3>
+        <h3>✨ Verse of the Day</h3>
         <div id="quote-arabic" class="quote-arabic"></div>
-        <p id="quote-translation" class="quote-translation"></p>
         <p id="quote-reference" class="muted quote-reference"></p>
-        <p id="quote-story" class="muted quote-story"></p>
-        <a id="quote-youtube-link" class="btn ghost" target="_blank" rel="noopener" hidden>▶ Learn the story on YouTube</a>
+        <p class="quote-label">What it says</p>
+        <p id="quote-translation" class="quote-translation"></p>
+        <p class="quote-label">In simple words</p>
+        <p id="quote-meaning" class="quote-translation"></p>
+        <p id="quote-story" class="muted quote-story" hidden></p>
+        <div class="quote-apply"><b>Try this today:</b> <span id="quote-apply"></span></div>
+        <a id="quote-youtube-link" class="btn ghost" target="_blank" rel="noopener" hidden>▶ Learn more on YouTube</a>
       </div>
 
       <div id="no-surah-selected" class="card empty-state" hidden>
@@ -60,7 +64,7 @@
         <div class="card">
           <h3>What this surah is about</h3>
           <p id="about-summary" class="about-text"></p>
-          <p class="muted tiny">Simple explanations are written to help you understand. They do not replace a teacher or a full tafsir (scholar's explanation).</p>
+          <p class="muted tiny">These notes use simple words to help you. A teacher can teach you more.</p>
         </div>
 
         <div class="card">
@@ -98,13 +102,13 @@
 
         <div class="card">
           <h3>Think about it</h3>
-          <p class="muted">Take a moment with each question and answer honestly.</p>
+          <p class="muted">Think about each question. Then write your answer.</p>
           <div id="reflection-list" class="reflection-list"></div>
         </div>
 
         <div class="card">
-          <h3>How well can you recite it?</h3>
-          <p class="muted">Slide to the level you think you are at right now.</p>
+          <h3>How well can you say it from memory?</h3>
+          <p class="muted">Slide to show how good you are right now.</p>
           <div class="level-row">
             <span class="tiny muted">1</span>
             <input id="level-slider" type="range" min="1" max="10" step="1" value="5">
@@ -114,8 +118,8 @@
         </div>
 
         <div class="card" id="recitation-card">
-          <h3>Recite it yourself</h3>
-          <p class="muted">When you feel ready, record yourself reciting the whole surah from memory. Then listen to your ENTIRE recording, start to finish. Skipping ahead will not unlock the next step.</p>
+          <h3>Say it yourself</h3>
+          <p class="muted">When you are ready, record yourself saying the whole surah from memory. Then listen to ALL of your recording, from start to end. Skipping ahead will not let you go on.</p>
           <div class="recitation-controls">
             <button id="btn-record-recitation" class="btn secondary">🎙️ Start Recording</button>
           </div>
@@ -123,7 +127,7 @@
           <p id="recitation-listen-note" class="muted" hidden></p>
           <label class="recitation-confirm-row">
             <input type="checkbox" id="recitation-confirm-checkbox" disabled>
-            <span>I listened to the whole recording and I am confident I recited this surah correctly.</span>
+            <span>I listened to all of my recording and I am sure I said this surah the right way.</span>
           </label>
           <div class="learned-actions">
             <button id="btn-mark-learned" class="btn primary" disabled>🎉 Mark this surah as learned</button>
@@ -139,7 +143,7 @@
     <section id="tab-wins" class="tab-panel">
       <div class="card">
         <h2>Your Wins</h2>
-        <p class="muted">Everything you have completed so far.</p>
+        <p class="muted">Everything you have finished so far.</p>
         <div class="wins-totals">
           <div class="win-tile"><div id="wins-learned" class="win-num">0</div><div class="win-label">Surahs learned</div></div>
           <div class="win-tile"><div id="wins-time" class="win-num">0</div><div class="win-label">Practice time</div></div>
@@ -195,8 +199,8 @@
         <h2>Settings</h2>
         <div class="settings-row">
           <div>
-            <strong>Preferred reciter (for audio search)</strong>
-            <p class="muted">Used to build your YouTube/Spotify search links</p>
+            <strong>Who do you like to listen to?</strong>
+            <p class="muted">This picks who you hear in the YouTube and Spotify links.</p>
           </div>
           <select id="reciter-select">
             <option value="Mishary Alafasy">Mishary Rashid Alafasy</option>
@@ -209,7 +213,7 @@
         <div class="settings-row" style="flex-direction:column; align-items:flex-start;">
           <div style="margin-bottom:10px;">
             <strong>Test your microphone</strong>
-            <p class="muted">Quick check that recording works on this device. It does not affect your progress.</p>
+            <p class="muted">Check that recording works on this phone. It does not change your progress.</p>
           </div>
           <button id="btn-test-mic" class="btn secondary">🎙️ Start Test Recording</button>
           <audio id="test-mic-audio" controls class="full-audio" hidden></audio>
@@ -217,7 +221,7 @@
         <div class="settings-row">
           <div>
             <strong>Reset everything</strong>
-            <p class="muted">Erases your notes, wins and practice time from this phone.</p>
+            <p class="muted">Deletes your notes, wins and practice time from this phone.</p>
           </div>
           <button id="btn-reset-all" class="btn danger-ghost">Reset</button>
         </div>
@@ -227,6 +231,6 @@
   </main>
 </div>
 
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>
