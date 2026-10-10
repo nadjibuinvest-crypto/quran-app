@@ -1,17 +1,19 @@
 // ---------- Constants & State ----------
-const LS_KEYS = {
-  plan: 'qa_plan',
-  completed: 'qa_completed',
+const LS = {
+  current: 'qa_current',        // surah number being studied
+  surahs: 'qa_surahs',          // per-surah progress, keyed by surah number
   reciter: 'qa_reciter',
-  monthlyGoal: 'qa_monthly_goal'
+  monthlyGoal: 'qa_monthly_goal',
+  loop: 'qa_loop'
 };
-
+const OLD_KEYS = ['qa_plan', 'qa_completed'];
 const DAY_MS = 24 * 60 * 60 * 1000;
+const $ = (id) => document.getElementById(id);
 
 let surahListCache = null;
-let currentSurahData = null; // { arabic, translation } for the surah currently in Learn tab
-let currentDayRange = null;  // { from, to } ayah range for today's focus
-let quizState = { questions: [], index: 0, correctCount: 0 };
+let surahInfoCache = null;
+let currentMeta = null;   // metadata of the surah open in Study tab
+let renderToken = 0;      // guards against slow loads landing on the wrong surah
 
 // ---------- Utilities ----------
 function loadJSON(key, fallback) {
@@ -38,11 +40,64 @@ function dayOfYear(d) {
   const start = new Date(d.getFullYear(), 0, 0);
   return Math.floor((d - start) / DAY_MS);
 }
-function daysSince(dateStr) {
-  const start = new Date(dateStr + 'T00:00:00');
-  const now = new Date();
-  const diff = Math.floor((new Date(now.toDateString()) - new Date(start.toDateString())) / DAY_MS);
-  return diff;
+function fmtDuration(sec) {
+  sec = Math.round(sec);
+  if (sec < 60) return `${sec} sec`;
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm ? `${h} h ${rm} min` : `${h} h`;
+}
+function el(tag, className, text) {
+  const e = document.createElement(tag);
+  if (className) e.className = className;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+// ---------- Per-surah progress ----------
+function allStates() {
+  return loadJSON(LS.surahs, {});
+}
+function getState(n) {
+  const s = allStates()[n] || {};
+  return {
+    note: s.note || '',
+    reflections: Array.isArray(s.reflections) ? s.reflections : [],
+    level: s.level ?? null,
+    listenSeconds: s.listenSeconds || 0,
+    repeats: s.repeats || 0,
+    learnedOn: s.learnedOn || null,
+    englishName: s.englishName || '',
+    arabicName: s.arabicName || ''
+  };
+}
+function setState(n, patch) {
+  const all = allStates();
+  all[n] = Object.assign({}, all[n] || {}, patch);
+  saveJSON(LS.surahs, all);
+}
+function currentSurahNumber() {
+  return parseInt(localStorage.getItem(LS.current) || '', 10) || null;
+}
+
+// Carry over progress saved by the old 14-day version of the app.
+function migrateOldData() {
+  const oldPlan = loadJSON('qa_plan', null);
+  const oldCompleted = loadJSON('qa_completed', null);
+  if (!oldPlan && !oldCompleted) return;
+  const all = allStates();
+  (oldCompleted || []).forEach(c => {
+    all[c.number] = Object.assign({}, all[c.number] || {}, {
+      learnedOn: c.finishedOn, englishName: c.englishName
+    });
+  });
+  saveJSON(LS.surahs, all);
+  if (oldPlan && !localStorage.getItem(LS.current)) {
+    localStorage.setItem(LS.current, String(oldPlan.number));
+  }
+  OLD_KEYS.forEach(k => localStorage.removeItem(k));
 }
 
 // ---------- Tabs ----------
@@ -50,33 +105,70 @@ function initTabs() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
-  document.getElementById('btn-goto-surahs').addEventListener('click', () => switchTab('surahs'));
+  $('btn-goto-surahs').addEventListener('click', () => switchTab('surahs'));
 }
 function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
-  if (tab === 'progress') renderProgressTab();
+  if (tab === 'wins') renderWins();
+  if (tab === 'surahs') renderSurahGrid();
+  window.scrollTo(0, 0);
+}
+function openSurah(n) {
+  localStorage.setItem(LS.current, String(n));
+  switchTab('learn');
+  renderStudy();
 }
 
-// ---------- Surah data (alquran.cloud) ----------
+// The Arabic data source puts the Bismillah in front of ayah 1 of most surahs.
+// It is not part of that verse, so remove it to match the translation below it.
+function stripBismillah(text, surahNumber, ayahNumber) {
+  if (ayahNumber !== 1 || surahNumber === 1 || surahNumber === 9) return text;
+  const words = text.replace(/^\uFEFF/, '').split(' ');
+  if (words.length > 4 && words[0].startsWith('\u0628\u0650\u0633\u0652\u0645\u0650')) {
+    return words.slice(4).join(' ');
+  }
+  return text;
+}
+
+// ---------- Data ----------
 async function getSurahList() {
   if (surahListCache) return surahListCache;
   const res = await fetch('https://api.alquran.cloud/v1/surah');
   const data = await res.json();
-  surahListCache = data.data; // array of 114
+  surahListCache = data.data; // array of 114, in order
   return surahListCache;
 }
 
 async function getSurahText(number) {
-  const [arRes, enRes, transRes] = await Promise.all([
+  const [arRes, enRes, trRes] = await Promise.all([
     fetch(`https://api.alquran.cloud/v1/surah/${number}/quran-uthmani`),
     fetch(`https://api.alquran.cloud/v1/surah/${number}/en.asad`),
     fetch(`https://api.alquran.cloud/v1/surah/${number}/en.transliteration`)
   ]);
-  const ar = await arRes.json();
-  const en = await enRes.json();
-  const trans = await transRes.json();
-  return { arabic: ar.data, translation: en.data, transliteration: trans.data };
+  const [ar, en, tr] = await Promise.all([arRes.json(), enRes.json(), trRes.json()]);
+  return { arabic: ar.data, translation: en.data, transliteration: tr.data };
+}
+
+// Plain-English summary + reflection questions for all 114 surahs.
+async function getSurahInfo(n) {
+  if (!surahInfoCache) {
+    const res = await fetch('data/surah-info.json?v=1');
+    if (!res.ok) throw new Error('surah info missing');
+    surahInfoCache = await res.json();
+  }
+  return surahInfoCache.find(i => i.n === n) || null;
+}
+
+// Simple explanation for each verse. Not every surah has one yet.
+async function getSimpleAyahs(n) {
+  try {
+    const res = await fetch(`data/ayah-simple/${n}.json?v=1`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    return null;
+  }
 }
 
 // ---------- Ayah of the Day (Motivation) ----------
@@ -95,8 +187,8 @@ const DAILY_AYAHS = [
   { ref: '9:40', theme: "The Hijra cave story — the Prophet ﷺ and Abu Bakr, and Allah's promise of aid.", youtube: 'story of the cave Hijra Prophet Muhammad Abu Bakr' },
   { ref: '3:139', theme: 'A call not to weaken or grieve — believers are honored when faith is firm.', youtube: 'Surah Al Imran 139 tafsir explanation' },
   { ref: '94:1', theme: 'Allah reminds the Prophet ﷺ of the expansion and relief given to his heart.', youtube: 'Surah Ash-Sharh Al-Inshirah explanation' },
-  { ref: '2:216', theme: 'You may dislike a thing which is good for you — trusting Allah\'s plan.', youtube: 'Surah Al-Baqarah 216 tafsir explanation' },
-  { ref: '55:13', theme: 'The refrain of Surah Ar-Rahman — counting Allah\'s countless favors.', youtube: 'Surah Ar-Rahman explained favors' },
+  { ref: '2:216', theme: "You may dislike a thing which is good for you — trusting Allah's plan.", youtube: 'Surah Al-Baqarah 216 tafsir explanation' },
+  { ref: '55:13', theme: "The refrain of Surah Ar-Rahman — counting Allah's countless favors.", youtube: 'Surah Ar-Rahman explained favors' },
   { ref: '16:97', theme: 'Righteous deeds, by male or female, are rewarded with a good life.', youtube: 'Surah An-Nahl 97 tafsir explanation' },
   { ref: '3:26', theme: 'Recognizing Allah as the sole owner of all sovereignty.', youtube: 'Surah Al Imran 26 tafsir explanation' },
   { ref: '17:23', theme: 'A command of kindness and mercy toward parents.', youtube: 'Surah Al-Isra 23 tafsir kindness to parents' },
@@ -120,233 +212,291 @@ async function renderAyahOfTheDay() {
   const entry = DAILY_AYAHS[idx];
   try {
     const { arabic, translation } = await getAyahText(entry.ref);
-    document.getElementById('quote-arabic').textContent = arabic.text;
-    document.getElementById('quote-translation').textContent = translation.text;
-    document.getElementById('quote-reference').textContent =
+    $('quote-arabic').textContent = stripBismillah(arabic.text, arabic.surah.number, arabic.numberInSurah);
+    $('quote-translation').textContent = translation.text;
+    $('quote-reference').textContent =
       `Surah ${arabic.surah.englishName} (${arabic.surah.name}) — Ayah ${arabic.numberInSurah}`;
-    document.getElementById('quote-story').textContent = entry.theme;
-    const ytLink = document.getElementById('quote-youtube-link');
+    $('quote-story').textContent = entry.theme;
+    const ytLink = $('quote-youtube-link');
     ytLink.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(entry.youtube)}`;
     ytLink.hidden = false;
   } catch (e) {
-    document.getElementById('quote-arabic').textContent = '';
-    document.getElementById('quote-translation').textContent = 'Could not load today\'s ayah — check your internet connection.';
-    document.getElementById('quote-reference').textContent = '';
-    document.getElementById('quote-story').textContent = '';
+    $('quote-arabic').textContent = '';
+    $('quote-translation').textContent = "Could not load today's ayah — check your internet connection.";
+    $('quote-reference').textContent = '';
+    $('quote-story').textContent = '';
   }
 }
 
 // ---------- All Surahs Tab ----------
-async function renderSurahsTab() {
-  const container = document.getElementById('surah-list');
+let surahSearchQuery = '';
+
+async function renderSurahGrid() {
+  const container = $('surah-list');
   try {
     const list = await getSurahList();
-    const plan = loadJSON(LS_KEYS.plan, null);
+    const states = allStates();
+    const current = currentSurahNumber();
     container.innerHTML = '';
     list.forEach(s => {
-      const card = document.createElement('div');
-      card.className = 'surah-card' + (plan && plan.number === s.number ? ' current' : '');
-      card.innerHTML = `
-        <div class="sc-top"><span class="sc-num">#${s.number}</span><span class="sc-arabic">${s.name}</span></div>
-        <div class="sc-name">${s.englishName}</div>
-        <div class="muted">${s.englishNameTranslation}</div>
-        <div class="sc-meta">${s.numberOfAyahs} verses · ${s.revelationType}</div>
-      `;
-      card.addEventListener('click', () => startSurahPlan(s));
+      const st = states[s.number] || {};
+      const q = surahSearchQuery;
+      const match = !q || s.englishName.toLowerCase().includes(q) ||
+        s.englishNameTranslation.toLowerCase().includes(q) || String(s.number).includes(q);
+      if (!match) return;
+      const card = el('div', 'surah-card' + (current === s.number ? ' current' : ''));
+      const top = el('div', 'sc-top');
+      top.append(el('span', 'sc-num', `#${s.number}`), el('span', 'sc-arabic', s.name));
+      card.append(top, el('div', 'sc-name', s.englishName), el('div', 'muted', s.englishNameTranslation));
+      card.append(el('div', 'sc-meta', `${s.numberOfAyahs} verses · ${s.revelationType}`));
+      if (st.learnedOn) card.append(el('span', 'chip chip-done', '✓ Learned'));
+      else if (st.listenSeconds > 0) card.append(el('span', 'chip', 'Practicing'));
+      card.addEventListener('click', () => openSurah(s.number));
       container.appendChild(card);
     });
-    document.getElementById('surah-search').addEventListener('input', (e) => {
-      const q = e.target.value.trim().toLowerCase();
-      container.querySelectorAll('.surah-card').forEach((card, i) => {
-        const s = list[i];
-        const match = s.englishName.toLowerCase().includes(q) ||
-          s.englishNameTranslation.toLowerCase().includes(q) ||
-          String(s.number).includes(q);
-        card.style.display = match ? '' : 'none';
-      });
-    });
+    if (!container.children.length) container.append(el('p', 'muted', 'No surah matches that search.'));
   } catch (e) {
     container.innerHTML = '<p class="muted">Could not load surah list. Check your internet connection.</p>';
   }
 }
 
-function startSurahPlan(surah) {
-  const plan = {
-    number: surah.number,
-    englishName: surah.englishName,
-    englishNameTranslation: surah.englishNameTranslation,
-    arabicName: surah.name,
-    numberOfAyahs: surah.numberOfAyahs,
-    revelationType: surah.revelationType,
-    startDate: todayStr(),
-    practicedDays: [],
-    quizDays: [],
-    recitationConfirmed: false
-  };
-  saveJSON(LS_KEYS.plan, plan);
-  switchTab('learn');
-  renderLearnTab();
+function initSurahSearch() {
+  $('surah-search').addEventListener('input', (e) => {
+    surahSearchQuery = e.target.value.trim().toLowerCase();
+    renderSurahGrid();
+  });
 }
 
-// ---------- Learn Tab ----------
-function buildDayPlan(numberOfAyahs) {
-  const learnDays = Math.min(7, numberOfAyahs);
-  const chunkSize = Math.ceil(numberOfAyahs / learnDays);
-  const days = [];
-  for (let d = 1; d <= learnDays; d++) {
-    const startAyah = (d - 1) * chunkSize + 1;
-    const endAyah = Math.min(d * chunkSize, numberOfAyahs);
-    days.push({ day: d, phase: 'learn', from: startAyah, to: endAyah });
-  }
-  for (let d = learnDays + 1; d <= 14; d++) {
-    days.push({ day: d, phase: 'review', from: 1, to: numberOfAyahs });
-  }
-  return days;
-}
+// ---------- Study Tab ----------
+const LEVEL_WORDS = [
+  '', 'Just starting', 'Just starting', 'Just starting',
+  'Getting there', 'Getting there', 'Getting there',
+  'Pretty good', 'Pretty good', 'Very strong', 'Almost perfect'
+];
 
-async function renderLearnTab() {
-  const plan = loadJSON(LS_KEYS.plan, null);
-  const emptyState = document.getElementById('no-surah-selected');
-  const content = document.getElementById('learn-content');
+async function renderStudy() {
+  const token = ++renderToken;
+  const n = currentSurahNumber();
+  const empty = $('no-surah-selected');
+  const content = $('learn-content');
 
-  if (!plan) {
-    emptyState.hidden = false;
+  if (!n) {
+    empty.hidden = false;
     content.hidden = true;
     return;
   }
-  emptyState.hidden = true;
+  empty.hidden = true;
   content.hidden = false;
 
-  const rawDay = daysSince(plan.startDate) + 1;
-  const dayNumber = Math.max(1, Math.min(14, rawDay));
+  const state = getState(n);
+  let meta = null;
+  try { meta = (await getSurahList())[n - 1]; } catch (e) { /* offline: fall back to saved name */ }
+  if (token !== renderToken) return;
+  currentMeta = meta;
 
-  document.getElementById('learn-surah-name').textContent = `${plan.number}. ${plan.englishName} — ${plan.englishNameTranslation}`;
-  document.getElementById('learn-surah-arabic').textContent = plan.arabicName;
-  document.getElementById('learn-surah-meta').textContent = `${plan.numberOfAyahs} verses · ${plan.revelationType}`;
-  document.getElementById('day-number').textContent = dayNumber;
-  document.getElementById('progress-fill').style.width = `${(dayNumber / 14) * 100}%`;
-  document.getElementById('streak-count').textContent = (plan.practicedDays || []).length;
+  const name = meta ? meta.englishName : (state.englishName || `Surah ${n}`);
+  $('learn-surah-name').textContent = meta
+    ? `${n}. ${meta.englishName} — ${meta.englishNameTranslation}`
+    : `${n}. ${name}`;
+  $('learn-surah-arabic').textContent = meta ? meta.name : state.arabicName;
+  $('learn-surah-meta').textContent = meta ? `${meta.numberOfAyahs} verses · ${meta.revelationType}` : '';
 
-  const dayPlan = buildDayPlan(plan.numberOfAyahs);
-  const today = dayPlan.find(d => d.day === dayNumber) || dayPlan[dayPlan.length - 1];
-  currentDayRange = { from: today.from, to: today.to };
-  document.getElementById('phase-label').textContent = today.phase === 'learn' ? 'Learning phase' : 'Review phase';
+  // About: plain-English summary, then the reflection questions.
+  let info = null;
+  try { info = await getSurahInfo(n); } catch (e) { /* shown as fallback text below */ }
+  if (token !== renderToken) return;
+  $('about-summary').textContent = info ? info.summary : 'The summary could not be loaded. Check your connection and try again.';
+  renderReflections(n, info ? info.questions : [], state.reflections);
 
-  const focusText = today.phase === 'learn'
-    ? `Focus on verses ${today.from}–${today.to} today. Read them slowly, listen to the recitation, and repeat each verse a few times.`
-    : `Review the full surah (verses 1–${plan.numberOfAyahs}) today to reinforce what you've learned.`;
-  document.getElementById('today-focus-text').textContent = focusText;
+  // Your own words, level, practice stats
+  $('my-summary').value = state.note;
+  $('my-summary-status').textContent = '';
+  $('level-slider').value = state.level ?? 5;
+  renderLevelLabel(state.level);
+  renderPracticeStats(n);
+  renderLoopButton();
 
-  const finishBtn = document.getElementById('btn-finish-surah');
-  const finishHelper = document.getElementById('finish-helper');
-  const recitationCard = document.getElementById('recitation-card');
-  finishBtn.hidden = dayNumber < 14;
-  recitationCard.hidden = dayNumber < 14;
-  if (dayNumber >= 14) {
-    const confirmed = !!plan.recitationConfirmed;
-    finishBtn.disabled = !confirmed;
-    finishHelper.textContent = confirmed ? '' : 'Complete the recitation check below to unlock this.';
-    document.getElementById('recitation-confirm-checkbox').checked = confirmed;
-    resetRecitationUI();
+  // Audio: only reload the source when the surah changed so playback is not interrupted.
+  const audio = $('audio-player');
+  if (audio.dataset.surah !== String(n)) {
+    audio.pause();
+    audio.dataset.surah = String(n);
+    audio.src = `https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/${n}.mp3`;
   }
+  const reciter = localStorage.getItem(LS.reciter) || 'Mishary Alafasy';
+  const query = encodeURIComponent(`${name} Surah ${reciter} full recitation`);
+  $('link-youtube').href = `https://www.youtube.com/results?search_query=${query}`;
+  $('link-spotify').href = `https://open.spotify.com/search/${query}`;
+  const details = $('yt-details');
+  details.open = false;
+  $('youtube-embed').removeAttribute('src');
+  $('youtube-embed').dataset.src = `https://www.youtube.com/embed?listType=search&list=${query}`;
 
-  refreshPracticeUI();
-
-  // Pace warning: flag if practiced days are meaningfully behind elapsed cycle days.
-  const paceWarning = document.getElementById('pace-warning');
-  const practicedCount = (plan.practicedDays || []).length;
-  if (dayNumber >= 4 && practicedCount < dayNumber - 3) {
-    paceWarning.hidden = false;
-    paceWarning.textContent = `You've practiced ${practicedCount} of ${dayNumber} days so far — pick up the pace or this surah won't be locked in by day 14.`;
-  } else {
-    paceWarning.hidden = true;
-  }
-
-  // Audio links
-  const reciter = localStorage.getItem(LS_KEYS.reciter) || 'Mishary Alafasy';
-  const query = encodeURIComponent(`${plan.englishName} Surah ${reciter} full recitation`);
-  document.getElementById('link-youtube').href = `https://www.youtube.com/results?search_query=${query}`;
-  document.getElementById('link-spotify').href = `https://open.spotify.com/search/${query}`;
-
-  const ytEmbed = document.getElementById('youtube-embed');
-  const ytWrap = document.getElementById('youtube-embed-wrap');
-  ytEmbed.src = `https://www.youtube.com/embed?listType=search&list=${query}`;
-  ytWrap.hidden = false;
+  resetRecitationUI();
+  refreshLearnedUI();
 
   // Verses
-  const versesList = document.getElementById('verses-list');
-  versesList.innerHTML = '<p class="muted">Loading verses…</p>';
-  try {
-    const { arabic, translation, transliteration } = await getSurahText(plan.number);
-    currentSurahData = { arabic, translation, transliteration };
-    versesList.innerHTML = '';
-    arabic.ayahs.forEach((ayah, i) => {
-      const inRange = ayah.numberInSurah >= today.from && ayah.numberInSurah <= today.to;
-      const item = document.createElement('div');
-      item.className = 'verse-item' + (inRange ? ' today-verse' : '');
-      item.innerHTML = `
-        <span class="verse-num">Ayah ${ayah.numberInSurah}</span>
-        <div class="verse-arabic">${ayah.text}</div>
-        <div class="verse-translit">${transliteration.ayahs[i].text}</div>
-        <div class="verse-translation">${translation.ayahs[i].text}</div>
-      `;
-      versesList.appendChild(item);
-    });
-  } catch (e) {
-    currentSurahData = null;
-    versesList.innerHTML = '<p class="muted">Could not load verse text. Check your internet connection.</p>';
+  const list = $('verses-list');
+  const note = $('verses-note');
+  list.innerHTML = '<p class="muted">Loading verses…</p>';
+  note.hidden = true;
+  const [text, simple] = await Promise.all([getSurahText(n).catch(() => null), getSimpleAyahs(n)]);
+  if (token !== renderToken) return;
+
+  if (!text) {
+    list.innerHTML = '<p class="muted">Could not load verse text. Check your internet connection.</p>';
+    return;
   }
-
-  renderQuizIdle();
-
-  // Audio player (per-ayah recitation, Alafasy edition, direct mp3s via CDN)
-  const audioPlayer = document.getElementById('audio-player');
-  document.getElementById('btn-play-audio').onclick = () => {
-    audioPlayer.hidden = false;
-    audioPlayer.src = `https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/${plan.number}.mp3`;
-    audioPlayer.play().catch(() => {});
-  };
-
-  document.getElementById('settings-current-plan').textContent =
-    `${plan.englishName} — Day ${dayNumber} of 14 (started ${plan.startDate})`;
+  const count = text.arabic.ayahs.length;
+  const hasSimple = Array.isArray(simple) && simple.length === count;
+  if (!hasSimple) {
+    note.hidden = false;
+    note.textContent = 'Simple explanations for each verse are not written for this surah yet. Use the summary above and the translation below.';
+  }
+  list.innerHTML = '';
+  text.arabic.ayahs.forEach((ayah, i) => {
+    const item = el('div', 'verse-item');
+    item.append(el('span', 'verse-num', `Ayah ${ayah.numberInSurah}`));
+    item.append(el('div', 'verse-arabic', stripBismillah(ayah.text, n, ayah.numberInSurah)));
+    item.append(el('div', 'verse-translit', text.transliteration.ayahs[i].text));
+    item.append(el('div', 'verse-translation', text.translation.ayahs[i].text));
+    if (hasSimple) {
+      const simpleBox = el('div', 'verse-simple');
+      simpleBox.append(el('b', null, 'In simple words: '), document.createTextNode(simple[i]));
+      item.append(simpleBox);
+    }
+    list.appendChild(item);
+  });
 }
 
-function initLearnActions() {
-  document.getElementById('btn-mark-today').addEventListener('click', () => {
-    const plan = loadJSON(LS_KEYS.plan, null);
-    if (!plan) return;
-    const t = todayStr();
-    const quizDoneToday = (plan.quizDays || []).includes(t);
-    if (!quizDoneToday) return; // gated behind today's recall check
-    plan.practicedDays = plan.practicedDays || [];
-    if (!plan.practicedDays.includes(t)) plan.practicedDays.push(t);
-    saveJSON(LS_KEYS.plan, plan);
-    refreshPracticeUI();
+function renderReflections(n, questions, answers) {
+  const box = $('reflection-list');
+  box.innerHTML = '';
+  questions.forEach((q, i) => {
+    const wrap = el('div', 'reflection');
+    wrap.append(el('label', 'reflection-q', `${i + 1}. ${q}`));
+    const ta = el('textarea', 'note-box');
+    ta.rows = 3;
+    ta.placeholder = 'Your answer...';
+    ta.value = answers[i] || '';
+    const status = el('p', 'muted tiny');
+    bindAutosave(ta, status, (value) => {
+      const current = getState(n).reflections.slice();
+      while (current.length < questions.length) current.push('');
+      current[i] = value;
+      setState(n, { reflections: current });
+    });
+    wrap.append(ta, status);
+    box.append(wrap);
+  });
+}
+
+// Saves a text field a moment after typing stops, for the surah that was open when typing.
+function bindAutosave(field, statusEl, save) {
+  let timer = null;
+  field.addEventListener('input', () => {
+    statusEl.textContent = 'Typing…';
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      save(field.value);
+      statusEl.textContent = 'Saved ✓';
+    }, 500);
+  });
+}
+
+function renderLevelLabel(level) {
+  $('level-label').textContent = level ? `${level} / 10 — ${LEVEL_WORDS[level]}` : 'Not rated yet';
+}
+
+function renderPracticeStats(n) {
+  const s = getState(n);
+  $('practice-stats').textContent = s.listenSeconds || s.repeats
+    ? `Practice time: ${fmtDuration(s.listenSeconds)} · Repeated ${s.repeats} ${s.repeats === 1 ? 'time' : 'times'}`
+    : 'Press play. Your practice time and repeats will be counted here.';
+}
+
+function renderLoopButton() {
+  const on = localStorage.getItem(LS.loop) === '1';
+  const btn = $('btn-loop');
+  btn.textContent = `🔁 Repeat: ${on ? 'On' : 'Off'}`;
+  btn.setAttribute('aria-pressed', String(on));
+  btn.classList.toggle('active', on);
+}
+
+function initStudyActions() {
+  bindAutosave($('my-summary'), $('my-summary-status'), (value) => {
+    const n = currentSurahNumber();
+    if (n) setState(n, { note: value });
   });
 
-  document.getElementById('btn-finish-surah').addEventListener('click', () => {
-    const plan = loadJSON(LS_KEYS.plan, null);
-    if (!plan) return;
-    if (!plan.recitationConfirmed) return; // gated behind the recitation check
-    const completed = loadJSON(LS_KEYS.completed, []);
-    completed.push({ number: plan.number, englishName: plan.englishName, finishedOn: todayStr() });
-    saveJSON(LS_KEYS.completed, completed);
-    localStorage.removeItem(LS_KEYS.plan);
-    renderLearnTab();
-    updateSettingsSummary();
-    switchTab('surahs');
-    renderSurahsTab();
+  const slider = $('level-slider');
+  slider.addEventListener('input', () => renderLevelLabel(parseInt(slider.value, 10)));
+  slider.addEventListener('change', () => {
+    const n = currentSurahNumber();
+    if (n) setState(n, { level: parseInt(slider.value, 10) });
   });
 
+  $('btn-rewind').addEventListener('click', () => {
+    const audio = $('audio-player');
+    audio.currentTime = Math.max(0, audio.currentTime - 5);
+  });
+
+  $('btn-loop').addEventListener('click', () => {
+    const on = localStorage.getItem(LS.loop) === '1';
+    localStorage.setItem(LS.loop, on ? '0' : '1');
+    renderLoopButton();
+  });
+
+  // Only load the video once someone actually opens it.
+  $('yt-details').addEventListener('toggle', (e) => {
+    const frame = $('youtube-embed');
+    if (e.target.open && !frame.getAttribute('src') && frame.dataset.src) frame.src = frame.dataset.src;
+  });
+
+  initPracticeTracking();
   initRecitationActions();
 }
 
-// ---------- Accountability: recitation-check gate (day 14) ----------
-// No browser on iOS supports real speech-to-text (Apple doesn't ship the Web
-// Speech API to any iOS browser engine), so there is no reliable way to
-// auto-grade recitation accuracy client-side. Instead, this enforces that the
-// full recording is actually listened to — not just skipped to the end —
-// before the confirmation checkbox unlocks.
+// Counts how long the reference recitation has been playing and how many times it finished.
+function initPracticeTracking() {
+  const audio = $('audio-player');
+  let timer = null;
+  let last = 0;
+
+  const stop = () => { clearInterval(timer); timer = null; };
+
+  audio.addEventListener('playing', () => {
+    stop();
+    last = Date.now();
+    timer = setInterval(() => {
+      const now = Date.now();
+      const delta = Math.min((now - last) / 1000, 2);
+      last = now;
+      const n = parseInt(audio.dataset.surah || '', 10);
+      if (!n || audio.paused || audio.seeking) return;
+      setState(n, { listenSeconds: getState(n).listenSeconds + delta });
+      if (n === currentSurahNumber()) renderPracticeStats(n);
+    }, 1000);
+  });
+  audio.addEventListener('pause', stop);
+  audio.addEventListener('ended', () => {
+    stop();
+    const n = parseInt(audio.dataset.surah || '', 10);
+    if (n) {
+      setState(n, { repeats: getState(n).repeats + 1 });
+      if (n === currentSurahNumber()) renderPracticeStats(n);
+    }
+    if (localStorage.getItem(LS.loop) === '1') {
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+    }
+  });
+}
+
+// ---------- Recite it yourself ----------
+// No browser on iOS supports speech-to-text, so accuracy cannot be graded
+// automatically. Instead the recording must be listened to in full (tracked
+// in real time, skipping ahead does not count) before it can be confirmed.
 let mediaRecorder = null;
 let recordedChunks = [];
 let recordingDuration = 0;
@@ -355,46 +505,45 @@ let listenTickInterval = null;
 let lastTickTime = null;
 
 function resetRecitationUI() {
-  const audioEl = document.getElementById('recitation-audio');
-  const recordBtn = document.getElementById('btn-record-recitation');
-  const listenNote = document.getElementById('recitation-listen-note');
-  const checkbox = document.getElementById('recitation-confirm-checkbox');
+  const audioEl = $('recitation-audio');
+  audioEl.pause();
   audioEl.hidden = true;
   audioEl.removeAttribute('src');
-  recordBtn.textContent = '🎙️ Start Recording';
-  recordBtn.disabled = false;
-  listenNote.hidden = true;
-  listenNote.textContent = '';
+  if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+  $('btn-record-recitation').textContent = '🎙️ Start Recording';
+  $('btn-record-recitation').disabled = false;
+  const note = $('recitation-listen-note');
+  note.hidden = true;
+  note.textContent = '';
+  const checkbox = $('recitation-confirm-checkbox');
+  checkbox.checked = false;
+  checkbox.disabled = true;
+  $('btn-mark-learned').disabled = true;
   recordingDuration = 0;
   listenedSeconds = 0;
   clearInterval(listenTickInterval);
-  const plan = loadJSON(LS_KEYS.plan, null);
-  if (!plan || !plan.recitationConfirmed) checkbox.disabled = true;
 }
 
-// Attaches listen-progress tracking to the recitation audio element exactly
-// once. recordingDuration/listenedSeconds are module-level state reset on
-// each new recording, so the same listeners work across "Record Again" cycles
-// without piling up duplicate handlers on the persistent DOM node.
+// Attached once; recordingDuration/listenedSeconds are reset for every new recording.
 function attachListenTracking(audio) {
   const updateNote = () => {
-    const listenNote = document.getElementById('recitation-listen-note');
+    const note = $('recitation-listen-note');
     if (!recordingDuration) return;
-    listenNote.hidden = false;
+    note.hidden = false;
     const pct = Math.min(100, Math.round((listenedSeconds / recordingDuration) * 100));
-    listenNote.textContent = `Listened ${Math.round(listenedSeconds)}s of ${Math.round(recordingDuration)}s (${pct}%) — listen to the whole thing to unlock confirmation.`;
+    note.textContent = `Listened ${Math.round(listenedSeconds)}s of ${Math.round(recordingDuration)}s (${pct}%). Listen to the whole thing to unlock the confirmation.`;
   };
 
   const checkUnlock = () => {
     if (recordingDuration > 0 && listenedSeconds >= recordingDuration * 0.9) {
-      document.getElementById('recitation-confirm-checkbox').disabled = false;
-      document.getElementById('recitation-listen-note').textContent = '✓ Full recording heard — you can confirm below.';
+      $('recitation-confirm-checkbox').disabled = false;
+      $('recitation-listen-note').textContent = '✓ Full recording heard. You can confirm below.';
     }
   };
 
   audio.addEventListener('loadedmetadata', () => {
     if (!isFinite(audio.duration)) {
-      // Blob-recorded audio sometimes reports Infinity duration until forced to seek.
+      // Recorded audio can report an infinite length until it is forced to seek.
       audio.currentTime = 1e101;
       audio.addEventListener('timeupdate', function fixOnce() {
         audio.removeEventListener('timeupdate', fixOnce);
@@ -424,10 +573,23 @@ function attachListenTracking(audio) {
   audio.addEventListener('ended', () => { clearInterval(listenTickInterval); checkUnlock(); });
 }
 
+function refreshLearnedUI() {
+  const n = currentSurahNumber();
+  if (!n) return;
+  const s = getState(n);
+  const learned = !!s.learnedOn;
+  $('learned-badge').hidden = !learned;
+  $('btn-mark-learned').hidden = learned;
+  $('btn-unlearn').hidden = !learned;
+  $('learned-status').textContent = learned
+    ? `🎉 You learned this surah on ${s.learnedOn}. It is in Your Wins.`
+    : '';
+}
+
 function initRecitationActions() {
-  const recordBtn = document.getElementById('btn-record-recitation');
-  const audioEl = document.getElementById('recitation-audio');
-  const checkbox = document.getElementById('recitation-confirm-checkbox');
+  const recordBtn = $('btn-record-recitation');
+  const audioEl = $('recitation-audio');
+  const checkbox = $('recitation-confirm-checkbox');
   attachListenTracking(audioEl);
 
   recordBtn.addEventListener('click', async () => {
@@ -441,23 +603,17 @@ function initRecitationActions() {
       mediaRecorder = new MediaRecorder(stream);
       mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
       mediaRecorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        if (!recordedChunks.length) return;
         recordingDuration = 0;
         listenedSeconds = 0;
-        const blob = new Blob(recordedChunks, { type: 'audio/webm' });
-        audioEl.src = URL.createObjectURL(blob);
+        audioEl.src = URL.createObjectURL(new Blob(recordedChunks, { type: 'audio/webm' }));
         audioEl.hidden = false;
-        stream.getTracks().forEach(t => t.stop());
         recordBtn.textContent = '🎙️ Record Again';
         recordBtn.disabled = false;
         checkbox.disabled = true;
         checkbox.checked = false;
-        const plan = loadJSON(LS_KEYS.plan, null);
-        if (plan) {
-          plan.recitationConfirmed = false;
-          saveJSON(LS_KEYS.plan, plan);
-          document.getElementById('btn-finish-surah').disabled = true;
-          document.getElementById('finish-helper').textContent = 'Complete the recitation check below to unlock this.';
-        }
+        $('btn-mark-learned').disabled = true;
       };
       mediaRecorder.start();
       recordBtn.textContent = '⏹ Stop Recording';
@@ -468,265 +624,119 @@ function initRecitationActions() {
   });
 
   checkbox.addEventListener('change', () => {
-    const plan = loadJSON(LS_KEYS.plan, null);
-    if (!plan) return;
-    plan.recitationConfirmed = checkbox.checked;
-    saveJSON(LS_KEYS.plan, plan);
-    const finishBtn = document.getElementById('btn-finish-surah');
-    const finishHelper = document.getElementById('finish-helper');
-    finishBtn.disabled = !checkbox.checked;
-    finishHelper.textContent = checkbox.checked ? '' : 'Complete the recitation check below to unlock this.';
+    $('btn-mark-learned').disabled = !checkbox.checked;
+  });
+
+  $('btn-mark-learned').addEventListener('click', () => {
+    const n = currentSurahNumber();
+    if (!n || !checkbox.checked) return;
+    setState(n, {
+      learnedOn: todayStr(),
+      englishName: currentMeta ? currentMeta.englishName : '',
+      arabicName: currentMeta ? currentMeta.name : ''
+    });
+    refreshLearnedUI();
+  });
+
+  $('btn-unlearn').addEventListener('click', () => {
+    const n = currentSurahNumber();
+    if (!n) return;
+    setState(n, { learnedOn: null });
+    refreshLearnedUI();
+    checkbox.checked = false;
+    $('btn-mark-learned').disabled = true;
   });
 }
 
-// ---------- Accountability: recall-check gate & pace tracking ----------
-function refreshPracticeUI() {
-  const plan = loadJSON(LS_KEYS.plan, null);
-  if (!plan) return;
-  const t = todayStr();
-  const quizDoneToday = (plan.quizDays || []).includes(t);
-  const alreadyPracticedToday = (plan.practicedDays || []).includes(t);
-  const btn = document.getElementById('btn-mark-today');
-  const helper = document.getElementById('mark-practiced-helper');
+// ---------- Your Wins Tab ----------
+async function renderWins() {
+  const states = allStates();
+  const entries = Object.keys(states).map(k => ({ n: parseInt(k, 10), ...getState(parseInt(k, 10)) }));
+  const learned = entries.filter(e => e.learnedOn).sort((a, b) => b.learnedOn.localeCompare(a.learnedOn));
+  const practicing = entries.filter(e => !e.learnedOn && e.listenSeconds > 0)
+    .sort((a, b) => b.listenSeconds - a.listenSeconds);
 
-  if (alreadyPracticedToday) {
-    btn.textContent = '✓ Practiced today';
-    btn.disabled = true;
-    helper.textContent = '';
-  } else if (!quizDoneToday) {
-    btn.textContent = '✓ Mark today practiced';
-    btn.disabled = true;
-    helper.textContent = "Complete today's recall check above to unlock this.";
-  } else {
-    btn.textContent = '✓ Mark today practiced';
-    btn.disabled = false;
-    helper.textContent = '';
-  }
-  document.getElementById('streak-count').textContent = (plan.practicedDays || []).length;
-}
+  $('wins-learned').textContent = learned.length;
+  $('wins-time').textContent = fmtDuration(entries.reduce((s, e) => s + e.listenSeconds, 0));
+  $('wins-repeats').textContent = entries.reduce((s, e) => s + e.repeats, 0);
 
-function buildQuizQuestions(count) {
-  if (!currentSurahData || !currentDayRange) return [];
-  const { arabic, translation } = currentSurahData;
-  const rangeAyahs = arabic.ayahs.filter(a => a.numberInSurah >= currentDayRange.from && a.numberInSurah <= currentDayRange.to);
-  const pool = rangeAyahs.length ? rangeAyahs : arabic.ayahs;
-  const picked = [...pool].sort(() => Math.random() - 0.5).slice(0, Math.min(count, pool.length));
-
-  return picked.map(ayah => {
-    const correctText = translation.ayahs.find(t => t.numberInSurah === ayah.numberInSurah).text;
-    const otherTexts = translation.ayahs
-      .filter(t => t.numberInSurah !== ayah.numberInSurah)
-      .map(t => t.text)
-      .sort(() => Math.random() - 0.5);
-    const distractors = [];
-    for (const txt of otherTexts) {
-      if (distractors.length >= 2) break;
-      if (txt !== correctText && !distractors.includes(txt)) distractors.push(txt);
-    }
-    const options = [correctText, ...distractors].sort(() => Math.random() - 0.5);
-    return { ayahNum: ayah.numberInSurah, arabicText: ayah.text, correctText, options };
-  });
-}
-
-function renderQuizIdle() {
-  const plan = loadJSON(LS_KEYS.plan, null);
-  const quizArea = document.getElementById('quiz-area');
-  if (!plan || !quizArea) return;
-  const doneToday = (plan.quizDays || []).includes(todayStr());
-  quizArea.innerHTML = `
-    <button id="btn-start-quiz" class="btn secondary">▶ ${doneToday ? 'Retake' : 'Start'} Recall Check</button>
-    ${doneToday ? '<p class="muted" style="margin-top:8px;">✓ Already completed today — feel free to retake for extra practice.</p>' : ''}
-  `;
-  document.getElementById('btn-start-quiz').addEventListener('click', startQuiz);
-}
-
-function startQuiz() {
-  const quizArea = document.getElementById('quiz-area');
-  const questions = buildQuizQuestions(5);
-  if (!questions.length) {
-    quizArea.innerHTML = '<p class="muted">Verses are still loading — try again in a moment.</p>';
-    return;
-  }
-  quizState = { questions, index: 0, correctCount: 0 };
-  showQuizQuestion();
-}
-
-function showQuizQuestion() {
-  const quizArea = document.getElementById('quiz-area');
-  const q = quizState.questions[quizState.index];
-  quizArea.innerHTML = `
-    <p class="muted">Question ${quizState.index + 1} of ${quizState.questions.length} — Ayah ${q.ayahNum}</p>
-    <div class="quiz-arabic">${q.arabicText}</div>
-    <p class="muted">Which translation matches this verse?</p>
-    <div class="quiz-options">
-      ${q.options.map((opt, i) => `<button class="btn ghost quiz-option" data-idx="${i}">${opt}</button>`).join('')}
-    </div>
-    <p id="quiz-feedback" class="quiz-feedback"></p>
-  `;
-  quizArea.querySelectorAll('.quiz-option').forEach(btn => {
-    btn.addEventListener('click', () => handleQuizAnswer(btn, q));
-  });
-}
-
-function handleQuizAnswer(btn, q) {
-  const quizArea = document.getElementById('quiz-area');
-  const feedback = document.getElementById('quiz-feedback');
-  quizArea.querySelectorAll('.quiz-option').forEach(b => { b.disabled = true; });
-
-  if (btn.textContent === q.correctText) {
-    btn.style.borderColor = 'var(--accent)';
-    feedback.textContent = '✓ Correct!';
-    feedback.style.color = 'var(--accent)';
-    quizState.correctCount++;
-  } else {
-    btn.style.borderColor = 'var(--danger)';
-    feedback.textContent = `✗ Not quite — correct answer: "${q.correctText}"`;
-    feedback.style.color = 'var(--danger)';
-  }
-
-  setTimeout(() => {
-    quizState.index++;
-    if (quizState.index < quizState.questions.length) {
-      showQuizQuestion();
-    } else {
-      finishQuiz();
-    }
-  }, 1500);
-}
-
-function finishQuiz() {
-  const quizArea = document.getElementById('quiz-area');
-  const plan = loadJSON(LS_KEYS.plan, null);
-  if (plan) {
-    plan.quizDays = plan.quizDays || [];
-    const t = todayStr();
-    if (!plan.quizDays.includes(t)) plan.quizDays.push(t);
-    saveJSON(LS_KEYS.plan, plan);
-  }
-  quizArea.innerHTML = `
-    <p class="quiz-result">You got ${quizState.correctCount} / ${quizState.questions.length} correct.</p>
-    <button id="btn-retry-quiz" class="btn ghost">↻ Try again</button>
-  `;
-  document.getElementById('btn-retry-quiz').addEventListener('click', startQuiz);
-  refreshPracticeUI();
-}
-
-// ---------- Progress Tab ----------
-function renderProgressTab() {
-  const completed = loadJSON(LS_KEYS.completed, []);
-  const goal = parseInt(localStorage.getItem(LS_KEYS.monthlyGoal) || '1', 10);
-  document.getElementById('monthly-goal-select').value = String(goal);
-
+  // This month vs. goal
+  const goal = parseInt(localStorage.getItem(LS.monthlyGoal) || '1', 10);
+  $('monthly-goal-select').value = String(goal);
   const now = new Date();
   const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const thisMonthCompleted = completed.filter(c => c.finishedOn.startsWith(monthKey));
-  const count = thisMonthCompleted.length;
+  const thisMonth = learned.filter(e => e.learnedOn.startsWith(monthKey)).length;
+  $('month-progress-fill').style.width = `${Math.min(100, (thisMonth / goal) * 100)}%`;
+  $('month-progress-text').textContent = thisMonth >= goal
+    ? `🎉 Goal reached: ${thisMonth} learned this month`
+    : `${thisMonth} of ${goal} learned this month`;
 
-  document.getElementById('month-progress-fill').style.width = `${Math.min(100, (count / goal) * 100)}%`;
-  document.getElementById('month-progress-text').textContent = `${count} of ${goal} surah${goal > 1 ? 's' : ''} finished this month.`;
+  let names = null;
+  try { names = await getSurahList(); } catch (e) { /* use saved names */ }
+  const label = (e) => {
+    const m = names ? names[e.n - 1] : null;
+    return `${e.n}. ${m ? m.englishName : (e.englishName || 'Surah ' + e.n)}`;
+  };
 
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const dayOfMonth = now.getDate();
-  const daysRemaining = daysInMonth - dayOfMonth;
-  const stillNeeded = Math.max(0, goal - count);
-  const daysNeeded = stillNeeded * 14;
+  const fill = (container, rows, emptyText, detail) => {
+    container.innerHTML = '';
+    if (!rows.length) { container.append(el('p', 'muted', emptyText)); return; }
+    rows.forEach(e => {
+      const row = el('button', 'win-row');
+      row.append(el('span', 'win-name', label(e)), el('span', 'muted win-detail', detail(e)));
+      row.addEventListener('click', () => openSurah(e.n));
+      container.append(row);
+    });
+  };
 
-  const paceEl = document.getElementById('month-pace-text');
-  if (stillNeeded === 0) {
-    paceEl.textContent = '🎉 Monthly goal met!';
-    paceEl.className = 'pace-status on-track';
-  } else if (daysNeeded <= daysRemaining) {
-    paceEl.textContent = `On track — you need ${stillNeeded} more surah${stillNeeded > 1 ? 's' : ''} and have ${daysRemaining} days left this month.`;
-    paceEl.className = 'pace-status on-track';
-  } else {
-    paceEl.textContent = `Behind pace — you need ${stillNeeded} more surah${stillNeeded > 1 ? 's' : ''} (~${daysNeeded} days of consistent practice) but only ${daysRemaining} days remain this month.`;
-    paceEl.className = 'pace-status behind';
-  }
-
-  const plan = loadJSON(LS_KEYS.plan, null);
-  const cycleText = document.getElementById('progress-cycle-text');
-  if (plan) {
-    const dayNumber = Math.max(1, Math.min(14, daysSince(plan.startDate) + 1));
-    const practicedCount = (plan.practicedDays || []).length;
-    const quizCount = (plan.quizDays || []).length;
-    cycleText.textContent = `${plan.englishName}: Day ${dayNumber} of 14 — practiced ${practicedCount} days, completed ${quizCount} recall checks so far.`;
-  } else {
-    cycleText.textContent = 'No surah in progress — start one from "All Surahs".';
-  }
-
-  const listEl = document.getElementById('completed-list');
-  if (!completed.length) {
-    listEl.innerHTML = '<p class="muted">No surahs completed yet.</p>';
-  } else {
-    listEl.innerHTML = [...completed].reverse().map(c =>
-      `<div class="completed-row"><span>${c.number}. ${c.englishName}</span><span class="muted">${c.finishedOn}</span></div>`
-    ).join('');
-  }
+  fill($('wins-list'), learned, 'No surahs learned yet. Your first win is waiting.', (e) => {
+    const parts = [`Learned ${e.learnedOn}`];
+    if (e.level) parts.push(`Level ${e.level}/10`);
+    if (e.listenSeconds) parts.push(fmtDuration(e.listenSeconds));
+    return parts.join(' · ');
+  });
+  fill($('practicing-list'), practicing, 'Nothing yet. Play a surah and it will show up here.', (e) => {
+    const parts = [fmtDuration(e.listenSeconds)];
+    if (e.level) parts.push(`Level ${e.level}/10`);
+    return parts.join(' · ');
+  });
 }
 
-function initProgressActions() {
-  document.getElementById('monthly-goal-select').addEventListener('change', (e) => {
-    localStorage.setItem(LS_KEYS.monthlyGoal, e.target.value);
-    renderProgressTab();
+function initWinsActions() {
+  $('monthly-goal-select').addEventListener('change', (e) => {
+    localStorage.setItem(LS.monthlyGoal, e.target.value);
+    renderWins();
   });
 }
 
 // ---------- Settings Tab ----------
-function updateSettingsSummary() {
-  const plan = loadJSON(LS_KEYS.plan, null);
-  document.getElementById('settings-current-plan').textContent = plan
-    ? `${plan.englishName} — started ${plan.startDate}`
-    : 'No surah in progress';
-  const completed = loadJSON(LS_KEYS.completed, []);
-  document.getElementById('settings-completed-count').textContent = `${completed.length} completed`;
-
-  const dateInput = document.getElementById('settings-start-date');
-  const saveBtn = document.getElementById('btn-save-start-date');
-  if (plan) {
-    dateInput.value = plan.startDate;
-    dateInput.disabled = false;
-    saveBtn.disabled = false;
-  } else {
-    dateInput.value = '';
-    dateInput.disabled = true;
-    saveBtn.disabled = true;
-  }
-}
-
 function initSettingsActions() {
-  const reciterSelect = document.getElementById('reciter-select');
-  reciterSelect.value = localStorage.getItem(LS_KEYS.reciter) || 'Mishary Alafasy';
+  const reciterSelect = $('reciter-select');
+  reciterSelect.value = localStorage.getItem(LS.reciter) || 'Mishary Alafasy';
   reciterSelect.addEventListener('change', () => {
-    localStorage.setItem(LS_KEYS.reciter, reciterSelect.value);
-    renderLearnTab();
+    localStorage.setItem(LS.reciter, reciterSelect.value);
+    renderStudy();
   });
 
-  document.getElementById('btn-reset-plan').addEventListener('click', () => {
-    if (confirm('Reset your current surah plan? This cannot be undone.')) {
-      localStorage.removeItem(LS_KEYS.plan);
-      renderLearnTab();
-      updateSettingsSummary();
-    }
-  });
-
-  document.getElementById('btn-save-start-date').addEventListener('click', () => {
-    const plan = loadJSON(LS_KEYS.plan, null);
-    const val = document.getElementById('settings-start-date').value;
-    if (!plan || !val) return;
-    plan.startDate = val;
-    saveJSON(LS_KEYS.plan, plan);
-    renderLearnTab();
-    updateSettingsSummary();
+  $('btn-reset-all').addEventListener('click', () => {
+    if (!confirm('Erase all your notes, wins and practice time from this phone? This cannot be undone.')) return;
+    Object.values(LS).forEach(k => localStorage.removeItem(k));
+    OLD_KEYS.forEach(k => localStorage.removeItem(k));
+    $('audio-player').pause();
+    $('audio-player').removeAttribute('src');
+    delete $('audio-player').dataset.surah;
+    renderStudy();
+    renderWins();
+    renderSurahGrid();
   });
 
   initMicTest();
 }
 
-// Standalone mic check — independent of the recitation gate's state, so
-// testing it never touches an in-progress surah's recitationConfirmed flag.
+// Standalone mic check, independent of any surah.
 function initMicTest() {
-  const btn = document.getElementById('btn-test-mic');
-  const audioEl = document.getElementById('test-mic-audio');
+  const btn = $('btn-test-mic');
+  const audioEl = $('test-mic-audio');
   let testRecorder = null;
   let testChunks = [];
 
@@ -741,8 +751,7 @@ function initMicTest() {
       testRecorder = new MediaRecorder(stream);
       testRecorder.ondataavailable = (e) => { if (e.data.size > 0) testChunks.push(e.data); };
       testRecorder.onstop = () => {
-        const blob = new Blob(testChunks, { type: 'audio/webm' });
-        audioEl.src = URL.createObjectURL(blob);
+        audioEl.src = URL.createObjectURL(new Blob(testChunks, { type: 'audio/webm' }));
         audioEl.hidden = false;
         stream.getTracks().forEach(t => t.stop());
         btn.textContent = '🎙️ Record Again';
@@ -763,12 +772,13 @@ if ('serviceWorker' in navigator) {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  migrateOldData();
   initTabs();
-  initLearnActions();
+  initSurahSearch();
+  initStudyActions();
+  initWinsActions();
   initSettingsActions();
-  initProgressActions();
-  renderLearnTab();
-  renderSurahsTab();
+  renderStudy();
+  renderSurahGrid();
   renderAyahOfTheDay();
-  updateSettingsSummary();
 });

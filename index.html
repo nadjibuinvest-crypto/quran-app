@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LP Quran</title>
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1a2530">
 <link rel="icon" href="icons/icon-32.png" sizes="32x32">
@@ -19,8 +19,8 @@
   <header class="topbar">
     <div class="brand">🕌 <span>LP Quran</span></div>
     <nav class="tabs">
-      <button class="tab-btn active" data-tab="learn">Learn</button>
-      <button class="tab-btn" data-tab="progress">Progress</button>
+      <button class="tab-btn active" data-tab="learn">Study</button>
+      <button class="tab-btn" data-tab="wins">Your Wins</button>
       <button class="tab-btn" data-tab="surahs">All Surahs</button>
       <button class="tab-btn" data-tab="settings">Settings</button>
     </nav>
@@ -28,8 +28,9 @@
 
   <main>
 
-    <!-- LEARN TAB -->
+    <!-- STUDY TAB -->
     <section id="tab-learn" class="tab-panel active">
+
       <div class="card quote-card">
         <h3>✨ Motivation — Ayah of the Day</h3>
         <div id="quote-arabic" class="quote-arabic"></div>
@@ -40,121 +41,140 @@
       </div>
 
       <div id="no-surah-selected" class="card empty-state" hidden>
-        <h2>No surah in progress</h2>
-        <p>Pick a surah from "All Surahs" to start your 14-day learning plan.</p>
+        <h2>Pick a surah to study</h2>
+        <p class="muted">There are 114 surahs. Choose any one to start.</p>
         <button id="btn-goto-surahs" class="btn primary">Choose a Surah</button>
       </div>
 
       <div id="learn-content" hidden>
+
         <div class="card plan-header">
           <div class="plan-title">
             <h2 id="learn-surah-name">—</h2>
             <span id="learn-surah-arabic" class="arabic-name"></span>
             <span id="learn-surah-meta" class="muted"></span>
           </div>
-          <div class="day-badge">
-            <div class="day-num" id="day-number">1</div>
-            <div class="day-label">of 14 days</div>
-          </div>
+          <div id="learned-badge" class="learned-badge" hidden>✓ Learned</div>
         </div>
 
         <div class="card">
-          <div class="progress-track">
-            <div class="progress-fill" id="progress-fill"></div>
-          </div>
-          <div class="progress-labels">
-            <span>Day 1</span>
-            <span id="phase-label" class="muted"></span>
-            <span>Day 14</span>
-          </div>
-          <div class="plan-actions">
-            <button id="btn-mark-today" class="btn secondary" disabled>✓ Mark today practiced</button>
-            <button id="btn-finish-surah" class="btn primary" hidden>🎉 Finished! Start Next Surah</button>
-          </div>
-          <p id="mark-practiced-helper" class="muted quiz-helper"></p>
-          <p id="finish-helper" class="muted quiz-helper"></p>
-          <p class="streak-line">🔥 Streak: <span id="streak-count">0</span> days practiced this cycle</p>
-          <p id="pace-warning" class="pace-warning" hidden></p>
+          <h3>What this surah is about</h3>
+          <p id="about-summary" class="about-text"></p>
+          <p class="muted tiny">Simple explanations are written to help you understand. They do not replace a teacher or a full tafsir (scholar's explanation).</p>
         </div>
 
         <div class="card">
-          <h3>Today's focus</h3>
-          <p id="today-focus-text" class="muted"></p>
-        </div>
-
-        <div class="card">
-          <h3>Test Yourself</h3>
-          <p class="muted">Read and listen first, then check what actually stuck — this is what unlocks marking today practiced.</p>
-          <div id="quiz-area" class="quiz-area"></div>
-        </div>
-
-        <div class="card" id="recitation-card" hidden>
-          <h3>Recite the Surah — Day 14 Gate</h3>
-          <p class="muted">Record yourself reciting the full surah from memory (no reading along). Then you must listen to your ENTIRE recording, start to finish, before you can confirm and move on — skipping ahead won't unlock it.</p>
-          <div class="recitation-controls">
-            <button id="btn-record-recitation" class="btn secondary">🎙️ Start Recording</button>
+          <h3>Listen and repeat</h3>
+          <audio id="audio-player" controls preload="none" class="full-audio"></audio>
+          <div class="audio-controls">
+            <button id="btn-rewind" class="btn secondary">⟲ Back 5 sec</button>
+            <button id="btn-loop" class="btn secondary" aria-pressed="false">🔁 Repeat: Off</button>
           </div>
-          <audio id="recitation-audio" controls style="width:100%; margin-top:10px;" hidden></audio>
-          <p id="recitation-listen-note" class="muted" hidden></p>
-          <label class="recitation-confirm-row">
-            <input type="checkbox" id="recitation-confirm-checkbox" disabled>
-            <span>I listened to the whole recording and I'm confident I recited this surah correctly.</span>
-          </label>
-        </div>
-
-        <div class="card">
-          <div class="audio-row">
-            <h3>Listen</h3>
-            <div class="audio-buttons">
-              <button id="btn-play-audio" class="btn secondary">▶ Play Recitation</button>
-              <a id="link-youtube" class="btn ghost" target="_blank" rel="noopener">YouTube</a>
-              <a id="link-spotify" class="btn ghost" target="_blank" rel="noopener">Spotify</a>
-            </div>
+          <p id="practice-stats" class="practice-stats"></p>
+          <div class="audio-buttons">
+            <a id="link-youtube" class="btn ghost" target="_blank" rel="noopener">YouTube</a>
+            <a id="link-spotify" class="btn ghost" target="_blank" rel="noopener">Spotify</a>
           </div>
-          <audio id="audio-player" controls style="width:100%; margin-top:10px;" hidden></audio>
-          <div id="youtube-embed-wrap" hidden>
+          <details id="yt-details" class="yt-details">
+            <summary>Watch a recitation video here</summary>
             <iframe id="youtube-embed" width="100%" height="220" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>
-          </div>
+          </details>
         </div>
 
         <div class="card">
-          <h3>Verses</h3>
+          <h3>Verse by verse</h3>
+          <p id="verses-note" class="muted" hidden></p>
           <div id="verses-list" class="verses-list">
             <p class="muted">Loading verses…</p>
           </div>
         </div>
+
+        <div class="card">
+          <h3>Say it in your own words</h3>
+          <p class="muted">What does this surah mean to you? Write it the way you understand it.</p>
+          <textarea id="my-summary" class="note-box" rows="4" placeholder="This surah is about..."></textarea>
+          <p id="my-summary-status" class="muted tiny"></p>
+        </div>
+
+        <div class="card">
+          <h3>Think about it</h3>
+          <p class="muted">Take a moment with each question and answer honestly.</p>
+          <div id="reflection-list" class="reflection-list"></div>
+        </div>
+
+        <div class="card">
+          <h3>How well can you recite it?</h3>
+          <p class="muted">Slide to the level you think you are at right now.</p>
+          <div class="level-row">
+            <span class="tiny muted">1</span>
+            <input id="level-slider" type="range" min="1" max="10" step="1" value="5">
+            <span class="tiny muted">10</span>
+          </div>
+          <p id="level-label" class="level-label">Not rated yet</p>
+        </div>
+
+        <div class="card" id="recitation-card">
+          <h3>Recite it yourself</h3>
+          <p class="muted">When you feel ready, record yourself reciting the whole surah from memory. Then listen to your ENTIRE recording, start to finish. Skipping ahead will not unlock the next step.</p>
+          <div class="recitation-controls">
+            <button id="btn-record-recitation" class="btn secondary">🎙️ Start Recording</button>
+          </div>
+          <audio id="recitation-audio" controls class="full-audio" hidden></audio>
+          <p id="recitation-listen-note" class="muted" hidden></p>
+          <label class="recitation-confirm-row">
+            <input type="checkbox" id="recitation-confirm-checkbox" disabled>
+            <span>I listened to the whole recording and I am confident I recited this surah correctly.</span>
+          </label>
+          <div class="learned-actions">
+            <button id="btn-mark-learned" class="btn primary" disabled>🎉 Mark this surah as learned</button>
+            <button id="btn-unlearn" class="btn ghost" hidden>Remove from Your Wins</button>
+          </div>
+          <p id="learned-status" class="muted"></p>
+        </div>
+
       </div>
     </section>
 
-    <!-- PROGRESS TAB -->
-    <section id="tab-progress" class="tab-panel">
+    <!-- YOUR WINS TAB -->
+    <section id="tab-wins" class="tab-panel">
+      <div class="card">
+        <h2>Your Wins</h2>
+        <p class="muted">Everything you have completed so far.</p>
+        <div class="wins-totals">
+          <div class="win-tile"><div id="wins-learned" class="win-num">0</div><div class="win-label">Surahs learned</div></div>
+          <div class="win-tile"><div id="wins-time" class="win-num">0</div><div class="win-label">Practice time</div></div>
+          <div class="win-tile"><div id="wins-repeats" class="win-num">0</div><div class="win-label">Times repeated</div></div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="settings-row" style="border-bottom:none; padding-top:0;">
           <div>
-            <h2 style="margin-bottom:2px;">Monthly Goal</h2>
-            <p class="muted">Surahs finished this calendar month</p>
+            <h3 style="margin-bottom:2px;">This month</h3>
+            <p id="month-progress-text" class="muted"></p>
           </div>
           <select id="monthly-goal-select">
-            <option value="1">1 surah / month</option>
-            <option value="2">2 surahs / month</option>
+            <option value="1">Goal: 1 surah</option>
+            <option value="2">Goal: 2 surahs</option>
+            <option value="3">Goal: 3 surahs</option>
           </select>
         </div>
-        <div class="progress-track" style="margin-top:14px;">
+        <div class="progress-track">
           <div class="progress-fill" id="month-progress-fill"></div>
         </div>
-        <p id="month-progress-text" class="muted" style="margin-top:8px;"></p>
-        <p id="month-pace-text" class="pace-status"></p>
       </div>
 
       <div class="card">
-        <h3>Current cycle accountability</h3>
-        <p id="progress-cycle-text" class="muted"></p>
+        <h3>Surahs you have learned</h3>
+        <div id="wins-list" class="wins-list">
+          <p class="muted">No surahs learned yet. Your first win is waiting.</p>
+        </div>
       </div>
 
       <div class="card">
-        <h3>Completed Surahs</h3>
-        <div id="completed-list" class="completed-list">
-          <p class="muted">No surahs completed yet.</p>
+        <h3>Still practicing</h3>
+        <div id="practicing-list" class="wins-list">
+          <p class="muted">Nothing yet.</p>
         </div>
       </div>
     </section>
@@ -175,29 +195,6 @@
         <h2>Settings</h2>
         <div class="settings-row">
           <div>
-            <strong>Current plan</strong>
-            <p class="muted" id="settings-current-plan">No surah in progress</p>
-          </div>
-          <button id="btn-reset-plan" class="btn danger-ghost">Reset current plan</button>
-        </div>
-        <div class="settings-row">
-          <div>
-            <strong>Correct cycle start date</strong>
-            <p class="muted">Only for fixing a mistaken date — not a shortcut to skip ahead.</p>
-          </div>
-          <div style="display:flex; gap:8px;">
-            <input type="date" id="settings-start-date" disabled>
-            <button id="btn-save-start-date" class="btn ghost">Save</button>
-          </div>
-        </div>
-        <div class="settings-row">
-          <div>
-            <strong>Completed surahs</strong>
-            <p class="muted" id="settings-completed-count">0 completed</p>
-          </div>
-        </div>
-        <div class="settings-row">
-          <div>
             <strong>Preferred reciter (for audio search)</strong>
             <p class="muted">Used to build your YouTube/Spotify search links</p>
           </div>
@@ -212,10 +209,17 @@
         <div class="settings-row" style="flex-direction:column; align-items:flex-start;">
           <div style="margin-bottom:10px;">
             <strong>Test your microphone</strong>
-            <p class="muted">Quick check that recording works on this device — not tied to any surah, doesn't affect your progress.</p>
+            <p class="muted">Quick check that recording works on this device. It does not affect your progress.</p>
           </div>
           <button id="btn-test-mic" class="btn secondary">🎙️ Start Test Recording</button>
-          <audio id="test-mic-audio" controls style="width:100%; margin-top:10px;" hidden></audio>
+          <audio id="test-mic-audio" controls class="full-audio" hidden></audio>
+        </div>
+        <div class="settings-row">
+          <div>
+            <strong>Reset everything</strong>
+            <p class="muted">Erases your notes, wins and practice time from this phone.</p>
+          </div>
+          <button id="btn-reset-all" class="btn danger-ghost">Reset</button>
         </div>
       </div>
     </section>
@@ -223,6 +227,6 @@
   </main>
 </div>
 
-<script src="app.js?v=8"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>
