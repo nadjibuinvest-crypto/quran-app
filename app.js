@@ -324,7 +324,7 @@ async function getSurahInfo(n) {
 // Simple explanation for each verse. Not every surah has one yet.
 async function getSimpleAyahs(n) {
   try {
-    const res = await fetch(`data/ayah-simple/${n}.json?v=2`);
+    const res = await fetch(`data/ayah-simple/${n}.json?v=3`);
     if (!res.ok) return null;
     return await res.json();
   } catch (e) {
