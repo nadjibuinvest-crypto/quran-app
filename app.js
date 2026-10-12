@@ -314,7 +314,7 @@ async function getSurahText(number) {
 // Plain-English summary + reflection questions for all 114 surahs.
 async function getSurahInfo(n) {
   if (!surahInfoCache) {
-    const res = await fetch('data/surah-info.json?v=1');
+    const res = await fetch('data/surah-info.json?v=2');
     if (!res.ok) throw new Error('surah info missing');
     surahInfoCache = await res.json();
   }
@@ -324,7 +324,7 @@ async function getSurahInfo(n) {
 // Simple explanation for each verse. Not every surah has one yet.
 async function getSimpleAyahs(n) {
   try {
-    const res = await fetch(`data/ayah-simple/${n}.json?v=1`);
+    const res = await fetch(`data/ayah-simple/${n}.json?v=2`);
     if (!res.ok) return null;
     return await res.json();
   } catch (e) {
