@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LP Quran</title>
-<link rel="stylesheet" href="styles.css?v=6">
+<link rel="stylesheet" href="styles.css?v=7">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1a2530">
 <link rel="icon" href="icons/icon-32.png" sizes="32x32">
@@ -14,10 +14,41 @@
 <meta name="apple-mobile-web-app-title" content="LP Quran">
 </head>
 <body>
+<div id="profile-screen" class="profile-screen" hidden>
+  <div class="profile-box">
+    <div class="profile-logo">🕌</div>
+    <h2 id="profile-title">Who is learning?</h2>
+    <p class="muted">Tap your name. Everyone keeps their own progress on this phone.</p>
+    <div id="profile-list" class="profile-list"></div>
+
+    <div id="profile-pin-form" class="profile-form" hidden>
+      <p id="pin-for"></p>
+      <input id="pin-input" type="password" inputmode="numeric" maxlength="4" placeholder="4-number PIN" autocomplete="off">
+      <p id="pin-error" class="form-error"></p>
+      <div class="profile-actions">
+        <button id="btn-pin-ok" class="btn primary" type="button">Open</button>
+        <button id="btn-pin-cancel" class="btn ghost" type="button">Cancel</button>
+      </div>
+    </div>
+
+    <button id="btn-show-add" class="btn secondary" type="button">➕ Add a person</button>
+    <div id="profile-add-form" class="profile-form" hidden>
+      <input id="profile-name-input" type="text" maxlength="20" placeholder="Your name" autocomplete="off">
+      <input id="profile-pin-input" type="password" inputmode="numeric" maxlength="4" placeholder="PIN, 4 numbers (optional)" autocomplete="off">
+      <p class="muted tiny">A PIN keeps other people out of your progress. You can leave it empty.</p>
+      <p id="profile-add-error" class="form-error"></p>
+      <div class="profile-actions">
+        <button id="btn-profile-save" class="btn primary" type="button">Save and start</button>
+      </div>
+    </div>
+    <button id="btn-profile-close" class="btn ghost" type="button" hidden>Close</button>
+  </div>
+</div>
+
 <div class="app">
 
   <header class="topbar">
-    <div class="brand">🕌 <span>LP Quran</span></div>
+    <div class="brand">🕌 <span>LP Quran</span><button id="btn-switch-person" class="person-chip" type="button">👤 <span id="person-name"></span></button></div>
     <nav class="tabs">
       <button class="tab-btn active" data-tab="learn">Study</button>
       <button class="tab-btn" data-tab="wins">Your Wins</button>
@@ -199,6 +230,16 @@
         <h2>Settings</h2>
         <div class="settings-row">
           <div>
+            <strong>Signed in as <span id="settings-person-name"></span></strong>
+            <p class="muted">Your progress is kept just for you on this phone.</p>
+          </div>
+          <div class="row-buttons">
+            <button id="btn-settings-switch" class="btn ghost" type="button">Switch</button>
+            <button id="btn-delete-person" class="btn danger-ghost" type="button">Delete</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div>
             <strong>Who do you like to listen to?</strong>
             <p class="muted">This picks who you hear in the YouTube and Spotify links.</p>
           </div>
@@ -221,7 +262,7 @@
         <div class="settings-row">
           <div>
             <strong>Reset everything</strong>
-            <p class="muted">Deletes your notes, wins and practice time from this phone.</p>
+            <p class="muted">Deletes this person's notes, wins and practice time.</p>
           </div>
           <button id="btn-reset-all" class="btn danger-ghost">Reset</button>
         </div>
@@ -231,6 +272,6 @@
   </main>
 </div>
 
-<script src="app.js?v=11"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>

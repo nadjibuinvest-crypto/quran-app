@@ -1,10 +1,16 @@
 // ---------- Constants & State ----------
+// Every person on this phone gets their own set of keys, so progress never mixes.
+const PROFILES_KEY = 'qa_profiles';       // [{ id, name, pinHash }]
+const ACTIVE_KEY = 'qa_active_profile';   // id of the person using the app now
+const PROFILE_FIELDS = ['current', 'surahs', 'reciter', 'monthly_goal', 'loop'];
+let activeProfileId = null;
+function profileKey(field) { return `qa_p${activeProfileId}_${field}`; }
 const LS = {
-  current: 'qa_current',        // surah number being studied
-  surahs: 'qa_surahs',          // per-surah progress, keyed by surah number
-  reciter: 'qa_reciter',
-  monthlyGoal: 'qa_monthly_goal',
-  loop: 'qa_loop'
+  get current() { return profileKey('current'); },       // surah number being studied
+  get surahs() { return profileKey('surahs'); },         // per-surah progress, keyed by surah number
+  get reciter() { return profileKey('reciter'); },
+  get monthlyGoal() { return profileKey('monthly_goal'); },
+  get loop() { return profileKey('loop'); }
 };
 const OLD_KEYS = ['qa_plan', 'qa_completed'];
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -72,6 +78,7 @@ function getState(n) {
     level: s.level ?? null,
     listenSeconds: s.listenSeconds || 0,
     repeats: s.repeats || 0,
+    ayahLevels: s.ayahLevels && typeof s.ayahLevels === 'object' ? s.ayahLevels : {},
     learnedOn: s.learnedOn || null,
     englishName: s.englishName || '',
     arabicName: s.arabicName || ''
@@ -102,6 +109,156 @@ function migrateOldData() {
     localStorage.setItem(LS.current, String(oldPlan.number));
   }
   OLD_KEYS.forEach(k => localStorage.removeItem(k));
+}
+
+// ---------- People ----------
+let pendingProfile = null;
+let activeVerseRecorder = null;
+
+function getProfiles() { return loadJSON(PROFILES_KEY, []); }
+function saveProfiles(list) { saveJSON(PROFILES_KEY, list); }
+function activeProfile() { return getProfiles().find(p => p.id === activeProfileId) || null; }
+function newProfileId() { return Math.random().toString(36).slice(2, 8); }
+
+async function hashPin(pin) {
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('lpquran:' + pin));
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) {
+    return 'plain:' + pin;
+  }
+}
+
+// Progress saved before people existed becomes the first person, named "Me".
+function adoptLegacyData() {
+  if (getProfiles().length) return;
+  const legacy = { qa_current: 'current', qa_surahs: 'surahs', qa_reciter: 'reciter', qa_monthly_goal: 'monthly_goal', qa_loop: 'loop' };
+  const hasLegacy = Object.keys(legacy).some(k => localStorage.getItem(k) !== null) ||
+    localStorage.getItem('qa_plan') !== null || localStorage.getItem('qa_completed') !== null;
+  if (!hasLegacy) return;
+  const id = newProfileId();
+  saveProfiles([{ id, name: 'Me', pinHash: null }]);
+  Object.entries(legacy).forEach(([oldKey, field]) => {
+    const v = localStorage.getItem(oldKey);
+    if (v !== null) { localStorage.setItem(`qa_p${id}_${field}`, v); localStorage.removeItem(oldKey); }
+  });
+  localStorage.setItem(ACTIVE_KEY, id);
+}
+
+function stopAllAudio() {
+  const audio = $('audio-player');
+  audio.pause();
+  audio.removeAttribute('src');
+  delete audio.dataset.surah;
+  if (activeVerseRecorder && activeVerseRecorder.state === 'recording') activeVerseRecorder.stop();
+}
+
+function startApp(id) {
+  activeProfileId = id;
+  localStorage.setItem(ACTIVE_KEY, id);
+  try { sessionStorage.setItem('qa_unlocked', id); } catch (e) { /* private mode */ }
+  $('profile-screen').hidden = true;
+  const person = activeProfile();
+  $('person-name').textContent = person ? person.name : '';
+  $('settings-person-name').textContent = person ? person.name : '';
+  migrateOldData();
+  stopAllAudio();
+  $('reciter-select').value = localStorage.getItem(LS.reciter) || 'Mishary Alafasy';
+  surahSearchQuery = '';
+  $('surah-search').value = '';
+  switchTab('learn');
+  renderStudy();
+  renderSurahGrid();
+}
+
+function showProfileScreen() {
+  $('audio-player').pause();
+  const profiles = getProfiles();
+  $('profile-screen').hidden = false;
+  $('profile-pin-form').hidden = true;
+  $('profile-add-error').textContent = '';
+  $('btn-show-add').hidden = !profiles.length;
+  $('profile-add-form').hidden = profiles.length > 0;
+  $('btn-profile-close').hidden = !activeProfile();
+  $('profile-title').textContent = profiles.length ? 'Who is learning?' : 'Welcome! What is your name?';
+  renderProfileList();
+}
+
+function renderProfileList() {
+  const box = $('profile-list');
+  box.innerHTML = '';
+  getProfiles().forEach(person => {
+    const btn = el('button', 'profile-btn');
+    btn.type = 'button';
+    btn.append(el('span', 'profile-avatar', (person.name.trim().charAt(0) || '?').toUpperCase()));
+    btn.append(el('span', 'profile-name', person.name));
+    if (person.pinHash) btn.append(el('span', 'profile-lock', '🔒'));
+    btn.addEventListener('click', () => chooseProfile(person));
+    box.append(btn);
+  });
+}
+
+function chooseProfile(person) {
+  if (!person.pinHash) { startApp(person.id); return; }
+  pendingProfile = person;
+  $('pin-for').textContent = `Type the PIN for ${person.name}`;
+  $('pin-input').value = '';
+  $('pin-error').textContent = '';
+  $('profile-pin-form').hidden = false;
+  $('pin-input').focus();
+}
+
+async function submitPin() {
+  if (!pendingProfile) return;
+  const hash = await hashPin($('pin-input').value.trim());
+  if (hash === pendingProfile.pinHash) startApp(pendingProfile.id);
+  else $('pin-error').textContent = 'That PIN is not right. Try again.';
+}
+
+async function saveNewPerson() {
+  const name = $('profile-name-input').value.trim();
+  const pin = $('profile-pin-input').value.trim();
+  const err = $('profile-add-error');
+  if (!name) { err.textContent = 'Please type a name.'; return; }
+  if (pin && !/^\d{4}$/.test(pin)) { err.textContent = 'A PIN is 4 numbers. Or leave it empty.'; return; }
+  const list = getProfiles();
+  if (list.some(x => x.name.toLowerCase() === name.toLowerCase())) { err.textContent = 'That name is already used.'; return; }
+  const person = { id: newProfileId(), name: name.slice(0, 20), pinHash: pin ? await hashPin(pin) : null };
+  saveProfiles(list.concat(person));
+  $('profile-name-input').value = '';
+  $('profile-pin-input').value = '';
+  startApp(person.id);
+}
+
+function deleteCurrentPerson() {
+  const person = activeProfile();
+  if (!person) return;
+  if (!confirm(`Delete ${person.name} and all of their notes, wins and practice time? You cannot undo this.`)) return;
+  PROFILE_FIELDS.forEach(f => localStorage.removeItem(`qa_p${person.id}_${f}`));
+  saveProfiles(getProfiles().filter(x => x.id !== person.id));
+  localStorage.removeItem(ACTIVE_KEY);
+  try { sessionStorage.removeItem('qa_unlocked'); } catch (e) { /* ignore */ }
+  activeProfileId = null;
+  stopAllAudio();
+  showProfileScreen();
+}
+
+function initPeople() {
+  $('btn-switch-person').addEventListener('click', showProfileScreen);
+  $('btn-settings-switch').addEventListener('click', showProfileScreen);
+  $('btn-delete-person').addEventListener('click', deleteCurrentPerson);
+  $('btn-profile-close').addEventListener('click', () => { $('profile-screen').hidden = true; });
+  $('btn-show-add').addEventListener('click', () => {
+    $('profile-add-form').hidden = false;
+    $('btn-show-add').hidden = true;
+    $('profile-pin-form').hidden = true;
+    $('profile-name-input').focus();
+  });
+  $('btn-profile-save').addEventListener('click', saveNewPerson);
+  $('btn-pin-ok').addEventListener('click', submitPin);
+  $('btn-pin-cancel').addEventListener('click', () => { $('profile-pin-form').hidden = true; pendingProfile = null; });
+  $('pin-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitPin(); });
+  $('profile-name-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveNewPerson(); });
 }
 
 // ---------- Tabs ----------
@@ -360,6 +517,7 @@ async function renderStudy() {
     note.textContent = 'Simple words for each verse are not ready for this surah yet. Read the summary above.';
   }
   list.innerHTML = '';
+  const ayahLevels = getState(n).ayahLevels;
   text.arabic.ayahs.forEach((ayah, i) => {
     const item = el('div', 'verse-item');
     item.append(el('span', 'verse-num', `Ayah ${ayah.numberInSurah}`));
@@ -371,8 +529,67 @@ async function renderStudy() {
       simpleBox.append(el('b', null, 'In simple words: '), document.createTextNode(simple[i]));
       item.append(simpleBox);
     }
+    item.append(buildVersePractice(n, ayah.numberInSurah, ayahLevels[ayah.numberInSurah] ?? null));
     list.appendChild(item);
   });
+}
+
+// A small box under every verse to rate yourself and record just that verse.
+function buildVersePractice(n, ayahNumber, level) {
+  const box = el('details', 'verse-practice');
+  const summary = el('summary', null, level ? `Practice this verse · ${level}/10` : 'Practice this verse');
+  box.append(summary);
+
+  const row = el('div', 'level-row');
+  const slider = el('input');
+  slider.type = 'range'; slider.min = '1'; slider.max = '10'; slider.step = '1';
+  slider.value = String(level ?? 5);
+  row.append(el('span', 'tiny muted', '1'), slider, el('span', 'tiny muted', '10'));
+  const label = el('p', 'level-label', level ? `${level} / 10 — ${LEVEL_WORDS[level]}` : 'How well can you say this verse? Slide to show.');
+  slider.addEventListener('input', () => {
+    const v = parseInt(slider.value, 10);
+    label.textContent = `${v} / 10 — ${LEVEL_WORDS[v]}`;
+  });
+  slider.addEventListener('change', () => {
+    const v = parseInt(slider.value, 10);
+    const levels = Object.assign({}, getState(n).ayahLevels, { [ayahNumber]: v });
+    setState(n, { ayahLevels: levels });
+    summary.textContent = `Practice this verse · ${v}/10`;
+  });
+
+  const recBtn = el('button', 'btn secondary', '🎙️ Say this verse');
+  recBtn.type = 'button';
+  const player = el('audio', 'full-audio');
+  player.controls = true;
+  player.hidden = true;
+  let recorder = null;
+  let chunks = [];
+  recBtn.addEventListener('click', async () => {
+    if (recorder && recorder.state === 'recording') { recorder.stop(); return; }
+    try {
+      if (activeVerseRecorder && activeVerseRecorder.state === 'recording') activeVerseRecorder.stop();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunks = [];
+      recorder = new MediaRecorder(stream);
+      activeVerseRecorder = recorder;
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      recorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        if (chunks.length) {
+          player.src = URL.createObjectURL(new Blob(chunks, { type: 'audio/webm' }));
+          player.hidden = false;
+        }
+        recBtn.textContent = '🎙️ Say it again';
+      };
+      recorder.start();
+      recBtn.textContent = '⏹ Stop';
+    } catch (e) {
+      alert('The microphone is needed to record. Please allow the microphone and try again.');
+    }
+  });
+
+  box.append(row, label, recBtn, player);
+  return box;
 }
 
 function renderReflections(n, questions, answers) {
@@ -725,12 +942,9 @@ function initSettingsActions() {
   });
 
   $('btn-reset-all').addEventListener('click', () => {
-    if (!confirm('Delete all your notes, wins and practice time from this phone? You cannot undo this.')) return;
+    if (!confirm('Delete all of your notes, wins and practice time? You cannot undo this.')) return;
     Object.values(LS).forEach(k => localStorage.removeItem(k));
-    OLD_KEYS.forEach(k => localStorage.removeItem(k));
-    $('audio-player').pause();
-    $('audio-player').removeAttribute('src');
-    delete $('audio-player').dataset.surah;
+    stopAllAudio();
     renderStudy();
     renderWins();
     renderSurahGrid();
@@ -778,13 +992,21 @@ if ('serviceWorker' in navigator) {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-  migrateOldData();
+  initPeople();
   initTabs();
   initSurahSearch();
   initStudyActions();
   initWinsActions();
   initSettingsActions();
-  renderStudy();
-  renderSurahGrid();
   renderAyahOfTheDay();
+
+  adoptLegacyData();
+  const profiles = getProfiles();
+  const savedId = localStorage.getItem(ACTIVE_KEY);
+  const saved = profiles.find(x => x.id === savedId);
+  let unlocked = null;
+  try { unlocked = sessionStorage.getItem('qa_unlocked'); } catch (e) { /* ignore */ }
+  // Open straight to the last person. A PIN is asked once each time the app is opened.
+  if (saved && (!saved.pinHash || unlocked === saved.id)) startApp(saved.id);
+  else showProfileScreen();
 });

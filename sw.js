@@ -1,9 +1,9 @@
-const CACHE_NAME = 'quran-app-v13';
+const CACHE_NAME = 'quran-app-v14';
 const APP_SHELL = [
   './',
   './index.html',
-  './styles.css?v=6',
-  './app.js?v=11',
+  './styles.css?v=7',
+  './app.js?v=12',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png'
