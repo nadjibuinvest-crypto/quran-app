@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LP Quran</title>
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=8">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1a2530">
 <link rel="icon" href="icons/icon-32.png" sizes="32x32">
@@ -100,12 +100,24 @@
 
         <div class="card">
           <h3>Listen and repeat</h3>
-          <audio id="audio-player" controls preload="none" class="full-audio"></audio>
+          <div class="player">
+            <button id="btn-play" class="play-big" type="button" aria-label="Play">▶</button>
+            <div class="player-main">
+              <input id="seek-slider" class="seek-slider" type="range" min="0" max="1000" step="1" value="0" aria-label="Move through the surah">
+              <div class="player-times"><span id="time-now">0:00</span><span id="time-total">--:--</span></div>
+            </div>
+          </div>
+          <audio id="audio-player" preload="metadata" class="sr-audio"></audio>
           <div class="audio-controls">
             <button id="btn-rewind" class="btn secondary">⟲ Back 5 sec</button>
             <button id="btn-loop" class="btn secondary" aria-pressed="false">🔁 Repeat: Off</button>
           </div>
           <p id="practice-stats" class="practice-stats"></p>
+          <div class="offline-row">
+            <button id="btn-offline" class="btn secondary" type="button">📥 Save for no internet</button>
+            <button id="btn-offline-remove" class="btn ghost" type="button" hidden>Remove from this phone</button>
+          </div>
+          <p id="offline-status" class="muted"></p>
           <div class="audio-buttons">
             <a id="link-youtube" class="btn ghost" target="_blank" rel="noopener">YouTube</a>
             <a id="link-spotify" class="btn ghost" target="_blank" rel="noopener">Spotify</a>
@@ -118,6 +130,7 @@
 
         <div class="card">
           <h3>Verse by verse</h3>
+          <p id="verses-lang" class="muted tiny"></p>
           <p id="verses-note" class="muted" hidden></p>
           <div id="verses-list" class="verses-list">
             <p class="muted">Loading verses…</p>
@@ -129,6 +142,9 @@
           <p class="muted">What does this surah mean to you? Write it the way you understand it.</p>
           <textarea id="my-summary" class="note-box" rows="4" placeholder="This surah is about..."></textarea>
           <p id="my-summary-status" class="muted tiny"></p>
+          <button id="btn-submit-words" class="btn primary" type="button">📨 Send my words for review</button>
+          <div id="review-box" class="review-box" hidden></div>
+          <p class="muted tiny">This is a simple check of your words against the main ideas of the surah. A teacher can check better.</p>
         </div>
 
         <div class="card">
@@ -230,6 +246,17 @@
         <h2>Settings</h2>
         <div class="settings-row">
           <div>
+            <strong>Quran translation</strong>
+            <p class="muted">Pick the language for the Quran words. The simple notes stay in simple English.</p>
+          </div>
+          <select id="language-select">
+            <option value="en">English (simple)</option>
+            <option value="sw">Kiswahili (Swahili)</option>
+            <option value="fr">Français (French)</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <div>
             <strong>Signed in as <span id="settings-person-name"></span></strong>
             <p class="muted">Your progress is kept just for you on this phone.</p>
           </div>
@@ -257,6 +284,7 @@
             <p class="muted">Check that recording works on this phone. It does not change your progress.</p>
           </div>
           <button id="btn-test-mic" class="btn secondary">🎙️ Start Test Recording</button>
+          <p id="mic-test-status" class="muted"></p>
           <audio id="test-mic-audio" controls class="full-audio" hidden></audio>
         </div>
         <div class="settings-row">
@@ -272,6 +300,6 @@
   </main>
 </div>
 
-<script src="app.js?v=14"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>

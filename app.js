@@ -2,7 +2,7 @@
 // Every person on this phone gets their own set of keys, so progress never mixes.
 const PROFILES_KEY = 'qa_profiles';       // [{ id, name, pinHash }]
 const ACTIVE_KEY = 'qa_active_profile';   // id of the person using the app now
-const PROFILE_FIELDS = ['current', 'surahs', 'reciter', 'monthly_goal', 'loop'];
+const PROFILE_FIELDS = ['current', 'surahs', 'reciter', 'monthly_goal', 'loop', 'language'];
 let activeProfileId = null;
 function profileKey(field) { return `qa_p${activeProfileId}_${field}`; }
 const LS = {
@@ -10,7 +10,8 @@ const LS = {
   get surahs() { return profileKey('surahs'); },         // per-surah progress, keyed by surah number
   get reciter() { return profileKey('reciter'); },
   get monthlyGoal() { return profileKey('monthly_goal'); },
-  get loop() { return profileKey('loop'); }
+  get loop() { return profileKey('loop'); },
+  get language() { return profileKey('language'); }   // en, sw or fr
 };
 const OLD_KEYS = ['qa_plan', 'qa_completed'];
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -79,6 +80,7 @@ function getState(n) {
     listenSeconds: s.listenSeconds || 0,
     repeats: s.repeats || 0,
     ayahLevels: s.ayahLevels && typeof s.ayahLevels === 'object' ? s.ayahLevels : {},
+    noteReview: s.noteReview || null,
     learnedOn: s.learnedOn || null,
     englishName: s.englishName || '',
     arabicName: s.arabicName || ''
@@ -113,7 +115,7 @@ function migrateOldData() {
 
 // ---------- People ----------
 let pendingProfile = null;
-let activeVerseRecorder = null;
+let activeVerseRec = null;
 
 function getProfiles() { return loadJSON(PROFILES_KEY, []); }
 function saveProfiles(list) { saveJSON(PROFILES_KEY, list); }
@@ -150,7 +152,7 @@ function stopAllAudio() {
   audio.pause();
   audio.removeAttribute('src');
   delete audio.dataset.surah;
-  if (activeVerseRecorder && activeVerseRecorder.state === 'recording') activeVerseRecorder.stop();
+  if (activeVerseRec) { activeVerseRec.cancel(); activeVerseRec = null; }
 }
 
 function startApp(id) {
@@ -164,6 +166,8 @@ function startApp(id) {
   migrateOldData();
   stopAllAudio();
   $('reciter-select').value = localStorage.getItem(LS.reciter) || 'Mishary Alafasy';
+  $('language-select').value = currentLanguage();
+  renderAyahOfTheDay();
   surahSearchQuery = '';
   $('surah-search').value = '';
   switchTab('learn');
@@ -293,43 +297,172 @@ function stripBismillah(text, surahNumber, ayahNumber) {
 }
 
 // ---------- Data ----------
+// Everything that is loaded is also kept on the phone, so a surah you have
+// opened before still works with no internet.
+const DATA_CACHE = 'quran-data';
+const AUDIO_CACHE = 'quran-audio';
+const LANGUAGES = {
+  en: { label: 'English (simple)', edition: 'en.itani' },
+  sw: { label: 'Kiswahili (Swahili)', edition: 'sw.barwani' },
+  fr: { label: 'Français (French)', edition: 'fr.hamidullah' }
+};
+function currentLanguage() {
+  const l = localStorage.getItem(LS.language);
+  return LANGUAGES[l] ? l : 'en';
+}
+
+async function fetchJSONCached(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    try { const c = await caches.open(DATA_CACHE); await c.put(url, res.clone()); } catch (e) { /* storage is off */ }
+    return await res.json();
+  } catch (err) {
+    try {
+      const hit = await caches.match(url);
+      if (hit) return await hit.json();
+    } catch (e) { /* ignore */ }
+    throw err;
+  }
+}
+
+const SURAH_LIST_URL = 'https://api.alquran.cloud/v1/surah';
+const INFO_URL = 'data/surah-info.json?v=2';
+const NOTES_URL = (n) => `data/ayah-simple/${n}.json?v=3`;
+function textUrls(n, lang) {
+  return [
+    `https://api.alquran.cloud/v1/surah/${n}/quran-uthmani`,
+    `https://api.alquran.cloud/v1/surah/${n}/${LANGUAGES[lang].edition}`,
+    `https://api.alquran.cloud/v1/surah/${n}/en.transliteration`
+  ];
+}
+
 async function getSurahList() {
   if (surahListCache) return surahListCache;
-  const res = await fetch('https://api.alquran.cloud/v1/surah');
-  const data = await res.json();
+  const data = await fetchJSONCached(SURAH_LIST_URL);
   surahListCache = data.data; // array of 114, in order
   return surahListCache;
 }
 
 async function getSurahText(number) {
-  const [arRes, enRes, trRes] = await Promise.all([
-    fetch(`https://api.alquran.cloud/v1/surah/${number}/quran-uthmani`),
-    fetch(`https://api.alquran.cloud/v1/surah/${number}/en.itani`),
-    fetch(`https://api.alquran.cloud/v1/surah/${number}/en.transliteration`)
-  ]);
-  const [ar, en, tr] = await Promise.all([arRes.json(), enRes.json(), trRes.json()]);
-  return { arabic: ar.data, translation: en.data, transliteration: tr.data };
+  const [ar, tr, tl] = await Promise.all(textUrls(number, currentLanguage()).map(fetchJSONCached));
+  return { arabic: ar.data, translation: tr.data, transliteration: tl.data };
 }
 
 // Plain-English summary + reflection questions for all 114 surahs.
 async function getSurahInfo(n) {
-  if (!surahInfoCache) {
-    const res = await fetch('data/surah-info.json?v=2');
-    if (!res.ok) throw new Error('surah info missing');
-    surahInfoCache = await res.json();
-  }
+  if (!surahInfoCache) surahInfoCache = await fetchJSONCached(INFO_URL);
   return surahInfoCache.find(i => i.n === n) || null;
 }
 
 // Simple explanation for each verse. Not every surah has one yet.
 async function getSimpleAyahs(n) {
   try {
-    const res = await fetch(`data/ayah-simple/${n}.json?v=3`);
-    if (!res.ok) return null;
-    return await res.json();
+    return await fetchJSONCached(NOTES_URL(n));
   } catch (e) {
     return null;
   }
+}
+
+// ---------- Audio (also saved for no internet) ----------
+const AUDIO_BASE = 'https://download.quranicaudio.com/quran/mishaari_raashid_al_3afaasee/';
+function audioUrl(n) { return AUDIO_BASE + String(n).padStart(3, '0') + '.mp3'; }
+function backupAudioUrl(n) { return `https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/${n}.mp3`; }
+let audioObjectUrl = null;
+
+async function setSurahAudio(n) {
+  const audio = $('audio-player');
+  audio.pause();
+  audio.dataset.surah = String(n);
+  audio.dataset.failedOver = '';
+  if (audioObjectUrl) { URL.revokeObjectURL(audioObjectUrl); audioObjectUrl = null; }
+  let src = audioUrl(n);
+  try {
+    const c = await caches.open(AUDIO_CACHE);
+    const hit = await c.match(audioUrl(n));
+    if (hit) { audioObjectUrl = URL.createObjectURL(await hit.blob()); src = audioObjectUrl; }
+  } catch (e) { /* play from the internet */ }
+  if (audio.dataset.surah !== String(n)) return;
+  audio.src = src;
+  resetPlayerUI();
+}
+
+async function isSavedOffline(n) {
+  try {
+    const c = await caches.open(AUDIO_CACHE);
+    return !!(await c.match(audioUrl(n)));
+  } catch (e) {
+    return false;
+  }
+}
+
+async function renderOfflineState(n) {
+  const saved = await isSavedOffline(n);
+  if (currentSurahNumber() !== n) return;
+  $('btn-offline').hidden = saved;
+  $('btn-offline-remove').hidden = !saved;
+  $('offline-status').textContent = saved
+    ? '✓ Saved on this phone. It works with no internet.'
+    : 'Save this surah on your phone to listen and read with no internet.';
+}
+
+async function saveSurahOffline(n) {
+  const status = $('offline-status');
+  const btn = $('btn-offline');
+  btn.disabled = true;
+  try {
+    let mb = null;
+    try {
+      const head = await fetch(audioUrl(n), { method: 'HEAD' });
+      const len = parseInt(head.headers.get('content-length') || '0', 10);
+      if (len) mb = Math.max(1, Math.round(len / 1048576));
+    } catch (e) { /* size is only a hint */ }
+    if (mb && !confirm(`This surah is about ${mb} MB. It is best to save it on Wi-Fi. Save it now?`)) {
+      btn.disabled = false;
+      return;
+    }
+    status.textContent = 'Saving the words…';
+    const dataCache = await caches.open(DATA_CACHE);
+    const urls = [SURAH_LIST_URL, INFO_URL, NOTES_URL(n), ...textUrls(n, currentLanguage())];
+    for (const u of urls) {
+      try { const r = await fetch(u); if (r.ok) await dataCache.put(u, r); } catch (e) { /* the notes may not exist */ }
+    }
+    const res = await fetch(audioUrl(n));
+    if (!res.ok || !res.body) throw new Error('audio');
+    const total = parseInt(res.headers.get('content-length') || '0', 10);
+    const reader = res.body.getReader();
+    const chunks = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      got += value.length;
+      status.textContent = total
+        ? `Saving the audio… ${Math.round((got / total) * 100)}%`
+        : `Saving the audio… ${Math.round(got / 1048576)} MB`;
+    }
+    const blob = new Blob(chunks, { type: 'audio/mpeg' });
+    const ac = await caches.open(AUDIO_CACHE);
+    await ac.put(audioUrl(n), new Response(blob, { headers: { 'Content-Type': 'audio/mpeg' } }));
+    try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) { /* ignore */ }
+  } catch (e) {
+    status.textContent = e && e.name === 'QuotaExceededError'
+      ? 'There is not enough space on this phone.'
+      : 'Could not save. Check your internet and try again.';
+    btn.disabled = false;
+    return;
+  }
+  btn.disabled = false;
+  await renderOfflineState(n);
+}
+
+async function removeOffline(n) {
+  try {
+    const c = await caches.open(AUDIO_CACHE);
+    await c.delete(audioUrl(n));
+  } catch (e) { /* ignore */ }
+  await renderOfflineState(n);
 }
 
 // ---------- Verse of the Day ----------
@@ -359,13 +492,11 @@ const DAILY_AYAHS = [
 ];
 
 async function getAyahText(ref) {
-  const [arRes, enRes] = await Promise.all([
-    fetch(`https://api.alquran.cloud/v1/ayah/${ref}/quran-uthmani`),
-    fetch(`https://api.alquran.cloud/v1/ayah/${ref}/en.itani`)
+  const [ar, tr] = await Promise.all([
+    fetchJSONCached(`https://api.alquran.cloud/v1/ayah/${ref}/quran-uthmani`),
+    fetchJSONCached(`https://api.alquran.cloud/v1/ayah/${ref}/${LANGUAGES[currentLanguage()].edition}`)
   ]);
-  const ar = await arRes.json();
-  const en = await enRes.json();
-  return { arabic: ar.data, translation: en.data };
+  return { arabic: ar.data, translation: tr.data };
 }
 
 async function renderAyahOfTheDay() {
@@ -451,6 +582,7 @@ async function renderStudy() {
   empty.hidden = true;
   content.hidden = false;
 
+  if (activeVerseRec) { activeVerseRec.cancel(); activeVerseRec = null; }
   const state = getState(n);
   let meta = null;
   try { meta = (await getSurahList())[n - 1]; } catch (e) { /* offline: fall back to saved name */ }
@@ -474,18 +606,17 @@ async function renderStudy() {
   // Your own words, level, practice stats
   $('my-summary').value = state.note;
   $('my-summary-status').textContent = '';
+  currentSimpleText = '';
+  renderReview(n);
   $('level-slider').value = state.level ?? 5;
   renderLevelLabel(state.level);
   renderPracticeStats(n);
   renderLoopButton();
 
   // Audio: only reload the source when the surah changed so playback is not interrupted.
-  const audio = $('audio-player');
-  if (audio.dataset.surah !== String(n)) {
-    audio.pause();
-    audio.dataset.surah = String(n);
-    audio.src = `https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/${n}.mp3`;
-  }
+  if ($('audio-player').dataset.surah !== String(n)) await setSurahAudio(n);
+  if (token !== renderToken) return;
+  renderOfflineState(n);
   const reciter = localStorage.getItem(LS.reciter) || 'Mishary Alafasy';
   const query = encodeURIComponent(`${name} Surah ${reciter} full recitation`);
   $('link-youtube').href = `https://www.youtube.com/results?search_query=${query}`;
@@ -512,6 +643,9 @@ async function renderStudy() {
   }
   const count = text.arabic.ayahs.length;
   const hasSimple = Array.isArray(simple) && simple.length === count;
+  const lang = currentLanguage();
+  currentSimpleText = hasSimple ? simple.join(' ') : '';
+  $('verses-lang').textContent = `Translation: ${LANGUAGES[lang].label}`;
   if (!hasSimple) {
     note.hidden = false;
     note.textContent = 'Simple words for each verse are not ready for this surah yet. Read the summary above.';
@@ -526,7 +660,7 @@ async function renderStudy() {
     item.append(el('div', 'verse-translation', text.translation.ayahs[i].text));
     if (hasSimple) {
       const simpleBox = el('div', 'verse-simple');
-      simpleBox.append(el('b', null, 'In simple words: '), document.createTextNode(simple[i]));
+      simpleBox.append(el('b', null, lang === 'en' ? 'In simple words: ' : 'In simple English: '), document.createTextNode(simple[i]));
       item.append(simpleBox);
     }
     item.append(buildVersePractice(n, ayah.numberInSurah, ayahLevels[ayah.numberInSurah] ?? null));
@@ -562,34 +696,138 @@ function buildVersePractice(n, ayahNumber, level) {
   const player = el('audio', 'full-audio');
   player.controls = true;
   player.hidden = true;
-  let recorder = null;
-  let chunks = [];
+  let rec = null;
+  let url = null;
   recBtn.addEventListener('click', async () => {
-    if (recorder && recorder.state === 'recording') { recorder.stop(); return; }
+    if (rec) {
+      const r = rec;
+      rec = null;
+      if (activeVerseRec === r) activeVerseRec = null;
+      recBtn.disabled = true;
+      try {
+        const { blob } = await r.stop();
+        if (url) URL.revokeObjectURL(url);
+        url = URL.createObjectURL(blob);
+        player.src = url;
+        player.hidden = false;
+        player.load();
+      } catch (e) {
+        alert(recordingErrorMessage(e));
+      }
+      recBtn.textContent = '🎙️ Say it again';
+      recBtn.disabled = false;
+      return;
+    }
+    if (activeVerseRec) { alert('Please stop the other recording first.'); return; }
     try {
-      if (activeVerseRecorder && activeVerseRecorder.state === 'recording') activeVerseRecorder.stop();
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      chunks = [];
-      recorder = new MediaRecorder(stream);
-      activeVerseRecorder = recorder;
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-      recorder.onstop = () => {
-        stream.getTracks().forEach(t => t.stop());
-        if (chunks.length) {
-          player.src = URL.createObjectURL(new Blob(chunks, { type: 'audio/webm' }));
-          player.hidden = false;
-        }
-        recBtn.textContent = '🎙️ Say it again';
-      };
-      recorder.start();
+      rec = await startRecording();
+      activeVerseRec = rec;
       recBtn.textContent = '⏹ Stop';
     } catch (e) {
-      alert('The microphone is needed to record. Please allow the microphone and try again.');
+      rec = null;
+      alert(recordingErrorMessage(e));
     }
   });
 
   box.append(row, label, recBtn, player);
   return box;
+}
+
+// ---------- Check "your own words" against what the surah is about ----------
+// This is a simple word check, not a teacher: it looks for the main ideas of the
+// surah (taken from its summary, questions and verse notes) in what you wrote.
+let currentSimpleText = '';
+let topicDocFreq = null;
+const STOP_LIST = ('a an the and or but if then so of to in on at by for with from as is are was were be been being it its this that ' +
+  'these those he she they them his her their you your we our us i me my not no yes do does did done have has had will would can could ' +
+  'should may might must about into over under up down out off again more most some any all each every other such only own same than ' +
+  'too very just also there here when where why how what which who whom while because until one two three many much make made makes ' +
+  'say says said tell tells told allah surah ayah verse quran people person like get gets got go goes went come comes came').split(' ');
+const STOPS = new Set(STOP_LIST);
+
+function stemWord(w) {
+  if (w.length > 5) w = w.replace(/(ing|ed)$/, '');
+  if (w.length > 4) w = w.replace(/(es|s)$/, '');
+  return w;
+}
+function wordsOf(text) {
+  return (String(text).toLowerCase().match(/[a-z']+/g) || [])
+    .map(w => w.replace(/'s$/, '').replace(/'/g, ''))
+    .filter(w => w.length > 2 && !STOPS.has(w))
+    .map(w => ({ word: w, stem: stemWord(w) }));
+}
+function topicWords(n) {
+  const docs = surahInfoCache || [];
+  const doc = docs.find(d => d.n === n);
+  if (!doc) return [];
+  if (!topicDocFreq) {
+    topicDocFreq = new Map();
+    docs.forEach(d => {
+      new Set(wordsOf(d.summary + ' ' + d.questions.join(' ')).map(t => t.stem))
+        .forEach(st => topicDocFreq.set(st, (topicDocFreq.get(st) || 0) + 1));
+    });
+  }
+  const counts = new Map();
+  wordsOf(doc.summary + ' ' + doc.summary + ' ' + doc.questions.join(' ') + ' ' + currentSimpleText).forEach(t => {
+    const cur = counts.get(t.stem) || { word: t.word, c: 0 };
+    cur.c += 1;
+    counts.set(t.stem, cur);
+  });
+  return [...counts.entries()]
+    .filter(([st]) => st.length >= 4)
+    .map(([st, v]) => ({ stem: st, word: v.word, score: v.c * Math.log((docs.length + 1) / ((topicDocFreq.get(st) || 0) + 1)) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 12);
+}
+
+function reviewOwnWords(n, text) {
+  const mine = wordsOf(text);
+  if (mine.length < 5) return { level: 'short', matched: [], missing: [] };
+  const mineStems = new Set(mine.map(t => t.stem));
+  const topic = topicWords(n);
+  const matched = topic.filter(t => mineStems.has(t.stem));
+  const missing = topic.filter(t => !mineStems.has(t.stem));
+  const level = matched.length >= 3 ? 'good' : matched.length >= 1 ? 'partial' : 'off';
+  return { level, matched: matched.map(t => t.word), missing: missing.slice(0, 4).map(t => t.word) };
+}
+
+function renderReview(n) {
+  const box = $('review-box');
+  const rv = getState(n).noteReview;
+  box.innerHTML = '';
+  if (!rv) { box.hidden = true; return; }
+  box.hidden = false;
+  box.className = 'review-box review-' + rv.level;
+  const heads = {
+    good: '✓ Review done: your words match this surah.',
+    partial: 'Review done: partly right. Add a little more.',
+    off: 'Review done: I could not find the main ideas of this surah in your words.'
+  };
+  box.append(el('b', null, heads[rv.level] || 'Review done.'));
+  if (rv.matched && rv.matched.length) box.append(el('p', null, `You wrote about: ${rv.matched.join(', ')}.`));
+  if (rv.level !== 'good' && rv.missing && rv.missing.length) {
+    box.append(el('p', null, `Try to also say something about: ${rv.missing.join(', ')}.`));
+  }
+  if (rv.level === 'off') box.append(el('p', null, 'Read "What this surah is about" above and try again.'));
+  box.append(el('p', 'muted tiny', `Sent for review on ${rv.submittedOn}.`));
+  const changed = (rv.text || '').trim() !== $('my-summary').value.trim();
+  if (changed) box.append(el('p', 'tiny', 'You changed your words. Press "Send my words for review" again.'));
+}
+
+function submitOwnWords() {
+  const n = currentSurahNumber();
+  if (!n) return;
+  const text = $('my-summary').value.trim();
+  const status = $('my-summary-status');
+  setState(n, { note: text });
+  const result = reviewOwnWords(n, text);
+  if (result.level === 'short') {
+    status.textContent = 'Please write a little more (one or two sentences), then send again.';
+    return;
+  }
+  setState(n, { noteReview: { ...result, text, submittedOn: todayStr() } });
+  status.textContent = 'Review submitted ✓';
+  renderReview(n);
 }
 
 function renderReflections(n, questions, answers) {
@@ -652,6 +890,9 @@ function initStudyActions() {
     if (n) setState(n, { note: value });
   });
 
+  $('btn-submit-words').addEventListener('click', submitOwnWords);
+  $('my-summary').addEventListener('input', () => { const n = currentSurahNumber(); if (n) renderReview(n); });
+
   const slider = $('level-slider');
   slider.addEventListener('input', () => renderLevelLabel(parseInt(slider.value, 10)));
   slider.addEventListener('change', () => {
@@ -676,8 +917,73 @@ function initStudyActions() {
     if (e.target.open && !frame.getAttribute('src') && frame.dataset.src) frame.src = frame.dataset.src;
   });
 
+  $('btn-offline').addEventListener('click', () => { const n = currentSurahNumber(); if (n) saveSurahOffline(n); });
+  $('btn-offline-remove').addEventListener('click', () => { const n = currentSurahNumber(); if (n) removeOffline(n); });
+
+  initPlayerUI();
   initPracticeTracking();
   initRecitationActions();
+}
+
+// ---------- Big player ----------
+function fmtClock(sec) {
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+function setPlayIcon(playing) {
+  const b = $('btn-play');
+  b.textContent = playing ? '⏸' : '▶';
+  b.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+}
+function resetPlayerUI() {
+  $('seek-slider').value = 0;
+  $('time-now').textContent = '0:00';
+  $('time-total').textContent = '--:--';
+  setPlayIcon(false);
+}
+function initPlayerUI() {
+  const audio = $('audio-player');
+  const slider = $('seek-slider');
+  let dragging = false;
+
+  $('btn-play').addEventListener('click', () => {
+    if (!audio.src) return;
+    if (audio.paused) audio.play().catch(() => {});
+    else audio.pause();
+  });
+  audio.addEventListener('play', () => setPlayIcon(true));
+  audio.addEventListener('pause', () => setPlayIcon(false));
+  audio.addEventListener('ended', () => setPlayIcon(false));
+
+  audio.addEventListener('timeupdate', () => {
+    if (!dragging && isFinite(audio.duration) && audio.duration > 0) {
+      slider.value = Math.round((audio.currentTime / audio.duration) * 1000);
+    }
+    $('time-now').textContent = fmtClock(audio.currentTime);
+  });
+  const showTotal = () => { $('time-total').textContent = isFinite(audio.duration) ? fmtClock(audio.duration) : '--:--'; };
+  audio.addEventListener('loadedmetadata', showTotal);
+  audio.addEventListener('durationchange', showTotal);
+
+  // If the main audio server cannot be reached, try the backup one once.
+  audio.addEventListener('error', () => {
+    const n = parseInt(audio.dataset.surah || '', 10);
+    if (!n || audio.dataset.failedOver === '1' || audio.src.startsWith('blob:')) return;
+    audio.dataset.failedOver = '1';
+    audio.src = backupAudioUrl(n);
+    audio.load();
+  });
+
+  slider.addEventListener('input', () => {
+    dragging = true;
+    if (isFinite(audio.duration)) $('time-now').textContent = fmtClock((slider.value / 1000) * audio.duration);
+  });
+  slider.addEventListener('change', () => {
+    if (isFinite(audio.duration)) audio.currentTime = (slider.value / 1000) * audio.duration;
+    dragging = false;
+  });
 }
 
 // Counts how long the reference recitation has been playing and how many times it finished.
@@ -716,12 +1022,132 @@ function initPracticeTracking() {
   });
 }
 
+// ---------- Recording ----------
+// Works on iPhone Safari (which records MP4) and on Chrome (WebM). If a phone has
+// no MediaRecorder at all, it records plain audio (WAV) instead.
+function RecError(code) { this.code = code; }
+
+function recordingErrorMessage(err) {
+  switch (err && err.code) {
+    case 'denied': return 'The microphone is blocked. Open your phone Settings, find Safari or this app, and allow the Microphone. Then try again.';
+    case 'nomic': return 'No microphone was found on this phone.';
+    case 'unsupported': return 'This phone or browser cannot record here. Please open the app in Safari or Chrome.';
+    case 'empty': return 'Nothing was recorded. Please try again and speak for a few seconds.';
+    default: return 'Recording did not work. Please close the app, open it again, and try once more.';
+  }
+}
+
+function pickRecorderType() {
+  if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
+  const types = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+  return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+}
+
+async function startRecording() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new RecError('unsupported');
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    const name = e && e.name;
+    throw new RecError(name === 'NotAllowedError' || name === 'SecurityError' ? 'denied'
+      : name === 'NotFoundError' || name === 'OverconstrainedError' ? 'nomic' : 'failed');
+  }
+  const startedAt = Date.now();
+  const stopTracks = () => stream.getTracks().forEach(t => t.stop());
+
+  if (typeof MediaRecorder !== 'undefined') {
+    try {
+      const mime = pickRecorderType();
+      const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      const chunks = [];
+      rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+      rec.start();
+      return {
+        cancel() { try { rec.onstop = null; rec.stop(); } catch (e) { /* already stopped */ } stopTracks(); },
+        stop() {
+          return new Promise((resolve, reject) => {
+            rec.onstop = () => {
+              stopTracks();
+              // Label the file with what the phone really recorded, or Safari cannot play it.
+              const blob = new Blob(chunks, { type: rec.mimeType || mime || 'audio/mp4' });
+              if (blob.size > 0) resolve({ blob, seconds: (Date.now() - startedAt) / 1000 });
+              else reject(new RecError('empty'));
+            };
+            try { rec.stop(); } catch (e) { stopTracks(); reject(new RecError('failed')); }
+          });
+        }
+      };
+    } catch (e) {
+      /* this phone cannot use MediaRecorder: use the plain audio way below */
+    }
+  }
+  return startWavRecording(stream, startedAt, stopTracks);
+}
+
+function startWavRecording(stream, startedAt, stopTracks) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) { stopTracks(); throw new RecError('unsupported'); }
+  const ctx = new AC();
+  if (ctx.state === 'suspended') ctx.resume();
+  const source = ctx.createMediaStreamSource(stream);
+  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  const mute = ctx.createGain();
+  mute.gain.value = 0;
+  const factor = Math.max(1, Math.floor(ctx.sampleRate / 16000));
+  const rate = Math.round(ctx.sampleRate / factor);
+  const chunks = [];
+  proc.onaudioprocess = (e) => {
+    const input = e.inputBuffer.getChannelData(0);
+    const out = new Int16Array(Math.floor(input.length / factor));
+    for (let i = 0; i < out.length; i++) {
+      const v = Math.max(-1, Math.min(1, input[i * factor]));
+      out[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+    }
+    chunks.push(out);
+  };
+  source.connect(proc);
+  proc.connect(mute);
+  mute.connect(ctx.destination);
+  const close = () => {
+    try { proc.disconnect(); source.disconnect(); mute.disconnect(); } catch (e) { /* ignore */ }
+    stopTracks();
+    try { ctx.close(); } catch (e) { /* ignore */ }
+  };
+  return {
+    cancel() { close(); },
+    stop() {
+      close();
+      const blob = encodeWav(chunks, rate);
+      return blob.size > 44
+        ? Promise.resolve({ blob, seconds: (Date.now() - startedAt) / 1000 })
+        : Promise.reject(new RecError('empty'));
+    }
+  };
+}
+
+function encodeWav(chunks, rate) {
+  let length = 0;
+  chunks.forEach(c => { length += c.length; });
+  const buffer = new ArrayBuffer(44 + length * 2);
+  const view = new DataView(buffer);
+  const text = (o, str) => { for (let i = 0; i < str.length; i++) view.setUint8(o + i, str.charCodeAt(i)); };
+  text(0, 'RIFF'); view.setUint32(4, 36 + length * 2, true); text(8, 'WAVE'); text(12, 'fmt ');
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  text(36, 'data'); view.setUint32(40, length * 2, true);
+  let offset = 44;
+  chunks.forEach(c => { for (let i = 0; i < c.length; i++, offset += 2) view.setInt16(offset, c[i], true); });
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
 // ---------- Recite it yourself ----------
 // No browser on iOS supports speech-to-text, so accuracy cannot be graded
 // automatically. Instead the recording must be listened to in full (tracked
 // in real time, skipping ahead does not count) before it can be confirmed.
-let mediaRecorder = null;
-let recordedChunks = [];
+let activeRecitationRec = null;
+let recitationTimer = null;
+let recitationUrl = null;
 let recordingDuration = 0;
 let listenedSeconds = 0;
 let listenTickInterval = null;
@@ -732,7 +1158,8 @@ function resetRecitationUI() {
   audioEl.pause();
   audioEl.hidden = true;
   audioEl.removeAttribute('src');
-  if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+  if (activeRecitationRec) { activeRecitationRec.cancel(); activeRecitationRec = null; }
+  clearInterval(recitationTimer);
   $('btn-record-recitation').textContent = '🎙️ Start Recording';
   $('btn-record-recitation').disabled = false;
   const note = $('recitation-listen-note');
@@ -764,20 +1191,11 @@ function attachListenTracking(audio) {
     }
   };
 
+  // The length is measured while recording, so a phone that cannot report the
+  // length of a file still works. The file's own length is used only if it is real.
   audio.addEventListener('loadedmetadata', () => {
-    if (!isFinite(audio.duration)) {
-      // Recorded audio can report an infinite length until it is forced to seek.
-      audio.currentTime = 1e101;
-      audio.addEventListener('timeupdate', function fixOnce() {
-        audio.removeEventListener('timeupdate', fixOnce);
-        audio.currentTime = 0;
-        recordingDuration = isFinite(audio.duration) ? audio.duration : 0;
-        updateNote();
-      });
-    } else {
-      recordingDuration = audio.duration;
-      updateNote();
-    }
+    if (isFinite(audio.duration) && audio.duration > 0.5) recordingDuration = audio.duration;
+    updateNote();
   });
 
   audio.addEventListener('play', () => {
@@ -816,33 +1234,49 @@ function initRecitationActions() {
   attachListenTracking(audioEl);
 
   recordBtn.addEventListener('click', async () => {
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stop();
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      recordedChunks = [];
-      mediaRecorder = new MediaRecorder(stream);
-      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
-      mediaRecorder.onstop = () => {
-        stream.getTracks().forEach(t => t.stop());
-        if (!recordedChunks.length) return;
-        recordingDuration = 0;
+    const note = $('recitation-listen-note');
+    if (activeRecitationRec) {
+      const rec = activeRecitationRec;
+      activeRecitationRec = null;
+      clearInterval(recitationTimer);
+      recordBtn.disabled = true;
+      try {
+        const { blob, seconds } = await rec.stop();
+        recordingDuration = seconds;
         listenedSeconds = 0;
-        audioEl.src = URL.createObjectURL(new Blob(recordedChunks, { type: 'audio/webm' }));
+        if (recitationUrl) URL.revokeObjectURL(recitationUrl);
+        recitationUrl = URL.createObjectURL(blob);
+        audioEl.src = recitationUrl;
         audioEl.hidden = false;
-        recordBtn.textContent = '🎙️ Record Again';
-        recordBtn.disabled = false;
+        audioEl.load();
         checkbox.disabled = true;
         checkbox.checked = false;
         $('btn-mark-learned').disabled = true;
-      };
-      mediaRecorder.start();
+        note.hidden = false;
+        note.textContent = `Recording saved (${fmtClock(seconds)}). Now press play and listen to all of it.`;
+      } catch (e) {
+        note.hidden = true;
+        alert(recordingErrorMessage(e));
+      }
+      recordBtn.textContent = '🎙️ Record Again';
+      recordBtn.disabled = false;
+      return;
+    }
+    try {
+      recordBtn.disabled = true;
+      audioEl.pause();
+      activeRecitationRec = await startRecording();
+      recordBtn.disabled = false;
       recordBtn.textContent = '⏹ Stop Recording';
+      const started = Date.now();
+      const tick = () => { note.hidden = false; note.textContent = `🔴 Recording… ${fmtClock((Date.now() - started) / 1000)}`; };
+      tick();
+      recitationTimer = setInterval(tick, 500);
     } catch (e) {
+      activeRecitationRec = null;
+      recordBtn.disabled = false;
       recordBtn.textContent = '🎙️ Start Recording';
-      alert('The microphone is needed to record. Please allow the microphone and try again.');
+      alert(recordingErrorMessage(e));
     }
   });
 
@@ -941,6 +1375,13 @@ function initSettingsActions() {
     renderStudy();
   });
 
+  const languageSelect = $('language-select');
+  languageSelect.addEventListener('change', () => {
+    localStorage.setItem(LS.language, languageSelect.value);
+    renderStudy();
+    renderAyahOfTheDay();
+  });
+
   $('btn-reset-all').addEventListener('click', () => {
     if (!confirm('Delete all of your notes, wins and practice time? You cannot undo this.')) return;
     Object.values(LS).forEach(k => localStorage.removeItem(k));
@@ -957,29 +1398,39 @@ function initSettingsActions() {
 function initMicTest() {
   const btn = $('btn-test-mic');
   const audioEl = $('test-mic-audio');
-  let testRecorder = null;
-  let testChunks = [];
+  const msg = $('mic-test-status');
+  let rec = null;
+  let url = null;
 
   btn.addEventListener('click', async () => {
-    if (testRecorder && testRecorder.state === 'recording') {
-      testRecorder.stop();
+    if (rec) {
+      const r = rec;
+      rec = null;
+      btn.disabled = true;
+      try {
+        const { blob, seconds } = await r.stop();
+        if (url) URL.revokeObjectURL(url);
+        url = URL.createObjectURL(blob);
+        audioEl.src = url;
+        audioEl.hidden = false;
+        audioEl.load();
+        msg.textContent = `✓ It works. You recorded ${fmtClock(seconds)}. Press play to hear it.`;
+      } catch (e) {
+        msg.textContent = '';
+        alert(recordingErrorMessage(e));
+      }
+      btn.textContent = '🎙️ Record Again';
+      btn.disabled = false;
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      testChunks = [];
-      testRecorder = new MediaRecorder(stream);
-      testRecorder.ondataavailable = (e) => { if (e.data.size > 0) testChunks.push(e.data); };
-      testRecorder.onstop = () => {
-        audioEl.src = URL.createObjectURL(new Blob(testChunks, { type: 'audio/webm' }));
-        audioEl.hidden = false;
-        stream.getTracks().forEach(t => t.stop());
-        btn.textContent = '🎙️ Record Again';
-      };
-      testRecorder.start();
+      rec = await startRecording();
       btn.textContent = '⏹ Stop Recording';
+      msg.textContent = '🔴 Recording… say something, then press Stop.';
     } catch (e) {
-      alert('Could not use the microphone. Check that this site is allowed to use the microphone in your phone settings.');
+      rec = null;
+      msg.textContent = '';
+      alert(recordingErrorMessage(e));
     }
   });
 }
@@ -998,7 +1449,6 @@ window.addEventListener('DOMContentLoaded', () => {
   initStudyActions();
   initWinsActions();
   initSettingsActions();
-  renderAyahOfTheDay();
 
   adoptLegacyData();
   const profiles = getProfiles();
