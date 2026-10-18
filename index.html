@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LP Quran</title>
-<link rel="stylesheet" href="styles.css?v=8">
+<link rel="stylesheet" href="styles.css?v=9">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1a2530">
 <link rel="icon" href="icons/icon-32.png" sizes="32x32">
@@ -112,6 +112,7 @@
             <button id="btn-rewind" class="btn secondary">⟲ Back 5 sec</button>
             <button id="btn-loop" class="btn secondary" aria-pressed="false">🔁 Repeat: Off</button>
           </div>
+          <p id="repeat-hint" class="muted tiny"></p>
           <p id="practice-stats" class="practice-stats"></p>
           <div class="offline-row">
             <button id="btn-offline" class="btn secondary" type="button">📥 Save for no internet</button>
@@ -280,6 +281,17 @@
         </div>
         <div class="settings-row" style="flex-direction:column; align-items:flex-start;">
           <div style="margin-bottom:10px;">
+            <strong>Use with no internet</strong>
+            <p class="muted">The app and all the Quran words are saved on your phone. To listen with no internet, save the audio too.</p>
+          </div>
+          <p id="offline-text-status" class="muted"></p>
+          <button id="btn-save-short" class="btn secondary" type="button">📥 Save the 38 short surahs for listening (about 67 MB)</button>
+          <p id="offline-bulk-status" class="muted"></p>
+          <p id="offline-audio-summary" class="muted"></p>
+          <button id="btn-clear-audio" class="btn ghost" type="button" hidden>Delete saved audio</button>
+        </div>
+        <div class="settings-row" style="flex-direction:column; align-items:flex-start;">
+          <div style="margin-bottom:10px;">
             <strong>Test your microphone</strong>
             <p class="muted">Check that recording works on this phone. It does not change your progress.</p>
           </div>
@@ -294,12 +306,15 @@
           </div>
           <button id="btn-reset-all" class="btn danger-ghost">Reset</button>
         </div>
+        <p class="muted tiny" style="margin-top:14px;">Credits: Quran text from Tanzil.net. Translations by Talal Itani (English), Ali Muhsin Al-Barwani (Swahili) and Muhammad Hamidullah (French). Audio by Mishary Alafasy from quranicaudio.com. Data from alquran.cloud.</p>
       </div>
     </section>
 
   </main>
 </div>
 
-<script src="app.js?v=15"></script>
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js?v=16"></script>
 </body>
 </html>

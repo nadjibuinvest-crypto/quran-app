@@ -173,6 +173,9 @@ function startApp(id) {
   switchTab('learn');
   renderStudy();
   renderSurahGrid();
+  renderOfflineTextStatus();
+  renderOfflineSummary();
+  setTimeout(prepareOffline, 800);
 }
 
 function showProfileScreen() {
@@ -326,27 +329,29 @@ async function fetchJSONCached(url) {
   }
 }
 
-const SURAH_LIST_URL = 'https://api.alquran.cloud/v1/surah';
+const SURAHS_URL = 'data/surahs.json?v=1';
 const INFO_URL = 'data/surah-info.json?v=2';
+const QURAN_URL = (n) => `data/quran/${n}.json?v=1`;
 const NOTES_URL = (n) => `data/ayah-simple/${n}.json?v=3`;
-function textUrls(n, lang) {
-  return [
-    `https://api.alquran.cloud/v1/surah/${n}/quran-uthmani`,
-    `https://api.alquran.cloud/v1/surah/${n}/${LANGUAGES[lang].edition}`,
-    `https://api.alquran.cloud/v1/surah/${n}/en.transliteration`
-  ];
-}
+const NOTES_INDEX_URL = 'data/notes-index.json?v=1';
 
 async function getSurahList() {
   if (surahListCache) return surahListCache;
-  const data = await fetchJSONCached(SURAH_LIST_URL);
-  surahListCache = data.data; // array of 114, in order
+  surahListCache = await fetchJSONCached(SURAHS_URL); // array of 114, in order
   return surahListCache;
 }
 
-async function getSurahText(number) {
-  const [ar, tr, tl] = await Promise.all(textUrls(number, currentLanguage()).map(fetchJSONCached));
-  return { arabic: ar.data, translation: tr.data, transliteration: tl.data };
+// The Quran words live inside the app (one small file per surah, in 5 versions),
+// so they work with no internet at all.
+const quranFiles = new Map();
+async function getQuranFile(n) {
+  if (!quranFiles.has(n)) quranFiles.set(n, await fetchJSONCached(QURAN_URL(n)));
+  return quranFiles.get(n);
+}
+async function getSurahText(n) {
+  const q = await getQuranFile(n);
+  const wrap = (arr) => ({ ayahs: arr.map((text, i) => ({ numberInSurah: i + 1, text })) });
+  return { arabic: wrap(q.ar), translation: wrap(q[currentLanguage()] || q.en), transliteration: wrap(q.tl) };
 }
 
 // Plain-English summary + reflection questions for all 114 surahs.
@@ -370,6 +375,29 @@ function audioUrl(n) { return AUDIO_BASE + String(n).padStart(3, '0') + '.mp3'; 
 function backupAudioUrl(n) { return `https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/${n}.mp3`; }
 let audioObjectUrl = null;
 
+let autoplayNext = false;
+function playSurah(next) {
+  if (next < 1 || next > 114) return;
+  autoplayNext = true;
+  localStorage.setItem(LS.current, String(next));
+  renderStudy();
+}
+
+// Shows the surah name and next/back buttons on the phone's lock screen.
+function updateMediaSession(n) {
+  if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+  try {
+    const meta = surahListCache && surahListCache[n - 1];
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: meta ? `${n}. ${meta.englishName}` : `Surah ${n}`,
+      artist: 'Mishary Alafasy',
+      album: 'LP Quran'
+    });
+    navigator.mediaSession.setActionHandler('nexttrack', n < 114 ? () => playSurah(n + 1) : null);
+    navigator.mediaSession.setActionHandler('previoustrack', n > 1 ? () => playSurah(n - 1) : null);
+  } catch (e) { /* not supported */ }
+}
+
 async function setSurahAudio(n) {
   const audio = $('audio-player');
   audio.pause();
@@ -385,6 +413,11 @@ async function setSurahAudio(n) {
   if (audio.dataset.surah !== String(n)) return;
   audio.src = src;
   resetPlayerUI();
+  updateMediaSession(n);
+  if (autoplayNext) {
+    autoplayNext = false;
+    audio.play().catch(() => {});
+  }
 }
 
 async function isSavedOffline(n) {
@@ -406,6 +439,32 @@ async function renderOfflineState(n) {
     : 'Save this surah on your phone to listen and read with no internet.';
 }
 
+async function downloadSurahAudio(n, onProgress) {
+  const res = await fetch(audioUrl(n));
+  if (!res.ok || !res.body) throw new Error('audio');
+  const total = parseInt(res.headers.get('content-length') || '0', 10);
+  const reader = res.body.getReader();
+  const chunks = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.length;
+    if (onProgress) onProgress(got, total);
+  }
+  const blob = new Blob(chunks, { type: 'audio/mpeg' });
+  const ac = await caches.open(AUDIO_CACHE);
+  await ac.put(audioUrl(n), new Response(blob, { headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': String(blob.size) } }));
+  try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) { /* ignore */ }
+}
+
+function saveErrorText(e) {
+  return e && e.name === 'QuotaExceededError'
+    ? 'There is not enough space on this phone.'
+    : 'Could not save. Check your internet and try again.';
+}
+
 async function saveSurahOffline(n) {
   const status = $('offline-status');
   const btn = $('btn-offline');
@@ -421,40 +480,148 @@ async function saveSurahOffline(n) {
       btn.disabled = false;
       return;
     }
-    status.textContent = 'Saving the words…';
-    const dataCache = await caches.open(DATA_CACHE);
-    const urls = [SURAH_LIST_URL, INFO_URL, NOTES_URL(n), ...textUrls(n, currentLanguage())];
-    for (const u of urls) {
-      try { const r = await fetch(u); if (r.ok) await dataCache.put(u, r); } catch (e) { /* the notes may not exist */ }
-    }
-    const res = await fetch(audioUrl(n));
-    if (!res.ok || !res.body) throw new Error('audio');
-    const total = parseInt(res.headers.get('content-length') || '0', 10);
-    const reader = res.body.getReader();
-    const chunks = [];
-    let got = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      got += value.length;
+    status.textContent = 'Saving the audio…';
+    await downloadSurahAudio(n, (got, total) => {
       status.textContent = total
         ? `Saving the audio… ${Math.round((got / total) * 100)}%`
         : `Saving the audio… ${Math.round(got / 1048576)} MB`;
-    }
-    const blob = new Blob(chunks, { type: 'audio/mpeg' });
-    const ac = await caches.open(AUDIO_CACHE);
-    await ac.put(audioUrl(n), new Response(blob, { headers: { 'Content-Type': 'audio/mpeg' } }));
-    try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) { /* ignore */ }
+    });
   } catch (e) {
-    status.textContent = e && e.name === 'QuotaExceededError'
-      ? 'There is not enough space on this phone.'
-      : 'Could not save. Check your internet and try again.';
+    status.textContent = saveErrorText(e);
     btn.disabled = false;
     return;
   }
   btn.disabled = false;
   await renderOfflineState(n);
+  renderOfflineSummary();
+}
+
+// The 38 short surahs (Al-Fatiha and 78–114) are about 67 MB in all.
+const SHORT_SURAHS = [1, ...Array.from({ length: 37 }, (_, i) => 78 + i)];
+
+async function saveShortSurahsOffline() {
+  const status = $('offline-bulk-status');
+  const btn = $('btn-save-short');
+  if (!confirm('This saves 38 short surahs (about 67 MB) so you can listen with no internet. It is best on Wi-Fi. Save them now?')) return;
+  btn.disabled = true;
+  let done = 0;
+  try {
+    for (const n of SHORT_SURAHS) {
+      if (!(await isSavedOffline(n))) {
+        status.textContent = `Saving surah ${n}… (${done} of ${SHORT_SURAHS.length} done)`;
+        await downloadSurahAudio(n);
+      }
+      done++;
+    }
+    status.textContent = `✓ All ${SHORT_SURAHS.length} short surahs are saved on this phone.`;
+  } catch (e) {
+    status.textContent = `${saveErrorText(e)} (${done} of ${SHORT_SURAHS.length} saved)`;
+  }
+  btn.disabled = false;
+  renderOfflineSummary();
+  const cur = currentSurahNumber();
+  if (cur) renderOfflineState(cur);
+}
+
+async function renderOfflineSummary() {
+  const box = $('offline-audio-summary');
+  try {
+    const ac = await caches.open(AUDIO_CACHE);
+    const keys = await ac.keys();
+    let bytes = 0;
+    for (const k of keys) {
+      const r = await ac.match(k);
+      const len = parseInt((r && r.headers.get('content-length')) || '0', 10);
+      bytes += len || (r ? (await r.blob()).size : 0);
+    }
+    box.textContent = keys.length
+      ? `Saved for listening: ${keys.length} ${keys.length === 1 ? 'surah' : 'surahs'} (${Math.round(bytes / 1048576)} MB).`
+      : 'No audio is saved on this phone yet.';
+    $('btn-clear-audio').hidden = !keys.length;
+  } catch (e) {
+    box.textContent = '';
+  }
+}
+
+async function clearSavedAudio() {
+  if (!confirm('Delete all the saved audio from this phone? You can save it again later.')) return;
+  try { await caches.delete(AUDIO_CACHE); } catch (e) { /* ignore */ }
+  renderOfflineSummary();
+  const cur = currentSurahNumber();
+  if (cur) renderOfflineState(cur);
+}
+
+// ---------- Get the whole app ready for no internet ----------
+// The first time the app is opened with internet, all 114 surahs (words in every
+// language, the notes and the questions) are saved on the phone in the background.
+const TEXT_FLAG = 'qa_text_saved_v1';   // for this phone, not for one person
+let preparingOffline = false;
+let toastTimer = null;
+
+function showToast(text, ms) {
+  const t = $('toast');
+  t.textContent = text;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  if (ms) toastTimer = setTimeout(() => { t.hidden = true; }, ms);
+}
+
+function renderOfflineTextStatus() {
+  const box = $('offline-text-status');
+  const appSaved = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+  const textSaved = localStorage.getItem(TEXT_FLAG) === 'done';
+  if (appSaved && textSaved) {
+    box.textContent = '✓ Ready. The app and all 114 surahs (the words, notes and questions) are saved on this phone. They work with no internet, even on a plane.';
+  } else if (!navigator.onLine) {
+    box.textContent = 'You have no internet right now. Open the app once with internet and it will get ready.';
+  } else if (!appSaved) {
+    box.textContent = 'Almost ready. Close the app and open it once more.';
+  } else {
+    box.textContent = 'Getting ready for no internet…';
+  }
+}
+
+async function prepareOffline() {
+  if (preparingOffline || !('caches' in window)) return;
+  if (localStorage.getItem(TEXT_FLAG) === 'done') { renderOfflineTextStatus(); return; }
+  if (!navigator.onLine) { renderOfflineTextStatus(); return; }
+  preparingOffline = true;
+  try {
+    let notes = [];
+    try { notes = await fetchJSONCached(NOTES_INDEX_URL); } catch (e) { /* no notes list */ }
+    const urls = [SURAHS_URL, INFO_URL];
+    for (let n = 1; n <= 114; n++) urls.push(QURAN_URL(n));
+    notes.forEach(n => urls.push(NOTES_URL(n)));
+    const cache = await caches.open(DATA_CACHE);
+    const queue = urls.slice();
+    let done = 0;
+    let failed = 0;
+    const worker = async () => {
+      while (queue.length) {
+        const u = queue.shift();
+        try {
+          if (!(await cache.match(u))) {
+            const r = await fetch(u);
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            await cache.put(u, r);
+          }
+        } catch (e) { failed++; }
+        done++;
+        if (done % 8 === 0 || done === urls.length) showToast(`Getting the app ready for no internet… ${Math.round((done / urls.length) * 100)}%`);
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    if (!failed) {
+      localStorage.setItem(TEXT_FLAG, 'done');
+      showToast('✓ Ready for no internet. All 114 surahs are saved on this phone.', 6000);
+      try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) { /* ignore */ }
+    } else {
+      showToast('Could not finish getting ready. Open the app again with internet.', 6000);
+    }
+  } finally {
+    preparingOffline = false;
+    renderOfflineTextStatus();
+  }
 }
 
 async function removeOffline(n) {
@@ -492,11 +659,13 @@ const DAILY_AYAHS = [
 ];
 
 async function getAyahText(ref) {
-  const [ar, tr] = await Promise.all([
-    fetchJSONCached(`https://api.alquran.cloud/v1/ayah/${ref}/quran-uthmani`),
-    fetchJSONCached(`https://api.alquran.cloud/v1/ayah/${ref}/${LANGUAGES[currentLanguage()].edition}`)
-  ]);
-  return { arabic: ar.data, translation: tr.data };
+  const [surahNo, ayahNo] = ref.split(':').map(Number);
+  const [q, list] = await Promise.all([getQuranFile(surahNo), getSurahList()]);
+  const meta = list[surahNo - 1];
+  return {
+    arabic: { text: q.ar[ayahNo - 1], numberInSurah: ayahNo, surah: { number: surahNo, name: meta.name, englishName: meta.englishName } },
+    translation: { text: (q[currentLanguage()] || q.en)[ayahNo - 1] }
+  };
 }
 
 async function renderAyahOfTheDay() {
@@ -882,6 +1051,9 @@ function renderLoopButton() {
   btn.textContent = `🔁 Repeat: ${on ? 'On' : 'Off'}`;
   btn.setAttribute('aria-pressed', String(on));
   btn.classList.toggle('active', on);
+  $('repeat-hint').textContent = on
+    ? 'Repeat is on: this surah plays again and again.'
+    : 'Repeat is off: the next surah plays after this one.';
 }
 
 function initStudyActions() {
@@ -917,6 +1089,8 @@ function initStudyActions() {
     if (e.target.open && !frame.getAttribute('src') && frame.dataset.src) frame.src = frame.dataset.src;
   });
 
+  $('btn-save-short').addEventListener('click', saveShortSurahsOffline);
+  $('btn-clear-audio').addEventListener('click', clearSavedAudio);
   $('btn-offline').addEventListener('click', () => { const n = currentSurahNumber(); if (n) saveSurahOffline(n); });
   $('btn-offline-remove').addEventListener('click', () => { const n = currentSurahNumber(); if (n) removeOffline(n); });
 
@@ -970,6 +1144,10 @@ function initPlayerUI() {
   // If the main audio server cannot be reached, try the backup one once.
   audio.addEventListener('error', () => {
     const n = parseInt(audio.dataset.surah || '', 10);
+    if (!navigator.onLine && !audio.src.startsWith('blob:')) {
+      $('offline-status').textContent = 'No internet right now. Press "Save for no internet" while you are online, and this surah will play anywhere.';
+      return;
+    }
     if (!n || audio.dataset.failedOver === '1' || audio.src.startsWith('blob:')) return;
     audio.dataset.failedOver = '1';
     audio.src = backupAudioUrl(n);
@@ -1018,6 +1196,8 @@ function initPracticeTracking() {
     if (localStorage.getItem(LS.loop) === '1') {
       audio.currentTime = 0;
       audio.play().catch(() => {});
+    } else if (n && n < 114 && n === currentSurahNumber()) {
+      playSurah(n + 1);   // Repeat is off: go on to the next surah
     }
   });
 }
@@ -1437,10 +1617,17 @@ function initMicTest() {
 
 // ---------- Init ----------
 if ('serviceWorker' in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});
+  });
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    renderOfflineTextStatus();
+    if (hadController) showToast('A new version is ready. Close the app and open it again.', 8000);
   });
 }
+window.addEventListener('online', () => { prepareOffline(); renderOfflineTextStatus(); });
+window.addEventListener('offline', renderOfflineTextStatus);
 
 window.addEventListener('DOMContentLoaded', () => {
   initPeople();
