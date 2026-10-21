@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LP Quran</title>
-<link rel="stylesheet" href="styles.css?v=9">
+<link rel="stylesheet" href="styles.css?v=10">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1a2530">
 <link rel="icon" href="icons/icon-32.png" sizes="32x32">
@@ -62,6 +62,17 @@
     <!-- STUDY TAB -->
     <section id="tab-learn" class="tab-panel active">
 
+      <div class="card today-card">
+        <h2>Today's ayahs</h2>
+        <div class="today-row">
+          <div id="today-dots" class="today-dots"></div>
+          <p id="today-text" class="today-text"></p>
+        </div>
+        <p class="muted tiny">Learn 2 ayahs a day. For each one: play it 10 times, answer the question, then tap "I understand". The next ayah opens only when you finish the one before it.</p>
+      </div>
+
+      <div id="study-body"><p class="muted">Loading…</p></div>
+
       <div class="card quote-card">
         <h3>✨ Verse of the Day</h3>
         <div id="quote-arabic" class="quote-arabic"></div>
@@ -75,31 +86,59 @@
         <a id="quote-youtube-link" class="btn ghost" target="_blank" rel="noopener" hidden>▶ Learn more on YouTube</a>
       </div>
 
-      <div id="no-surah-selected" class="card empty-state" hidden>
-        <h2>Pick a surah to study</h2>
-        <p class="muted">There are 114 surahs. Choose any one to start.</p>
-        <button id="btn-goto-surahs" class="btn primary">Choose a Surah</button>
+      <audio id="ayah-audio" preload="auto" class="sr-audio"></audio>
+    </section>
+
+    <!-- YOUR WINS TAB -->
+    <section id="tab-wins" class="tab-panel">
+      <div class="card">
+        <h2>Your Wins</h2>
+        <p class="muted">What you have learned so far.</p>
+        <div class="wins-totals">
+          <div class="win-tile"><div id="wins-ayahs" class="win-num">0</div><div class="win-label">Ayahs learned</div></div>
+          <div class="win-tile"><div id="wins-surahs" class="win-num">0</div><div class="win-label">Surahs finished</div></div>
+          <div class="win-tile"><div id="wins-days" class="win-num">0</div><div class="win-label">Days you learned</div></div>
+        </div>
       </div>
 
-      <div id="learn-content" hidden>
+      <div class="card">
+        <h3>What you learned</h3>
+        <div id="wins-list" class="wins-list">
+          <p class="muted">Nothing yet. Your first ayah is waiting in the Study tab.</p>
+        </div>
+      </div>
+    </section>
 
-        <div class="card plan-header">
-          <div class="plan-title">
-            <h2 id="learn-surah-name">—</h2>
-            <span id="learn-surah-arabic" class="arabic-name"></span>
-            <span id="learn-surah-meta" class="muted"></span>
+    <!-- ALL SURAHS TAB -->
+    <section id="tab-surahs" class="tab-panel">
+      <div class="card lang-card">
+        <label for="listen-language-select"><strong>Quran words in:</strong></label>
+        <select id="listen-language-select">
+          <option value="en">English (simple)</option>
+          <option value="sw">Kiswahili (Swahili)</option>
+          <option value="fr">Français (French)</option>
+        </select>
+      </div>
+
+      <div id="surah-browse">
+        <button id="now-playing" class="btn secondary now-playing" type="button" hidden></button>
+        <div class="card">
+          <input id="surah-search" type="text" placeholder="Search surahs by name or number…" class="search-input">
+          <p class="muted tiny" style="margin:8px 0 0;">Tap a surah to listen. When it ends, the next surah plays.</p>
+        </div>
+        <div id="surah-list" class="surah-grid">
+          <p class="muted">Loading surah list…</p>
+        </div>
+      </div>
+
+      <div id="surah-listen" hidden>
+        <div class="card">
+          <button id="btn-listen-back" class="btn ghost" type="button">← All surahs</button>
+          <div class="plan-title" style="margin-top:12px;">
+            <h2 id="listen-name">—</h2>
+            <span id="listen-arabic" class="arabic-name"></span>
+            <span id="listen-meta" class="muted"></span>
           </div>
-          <div id="learned-badge" class="learned-badge" hidden>✓ Learned</div>
-        </div>
-
-        <div class="card">
-          <h3>What this surah is about</h3>
-          <p id="about-summary" class="about-text"></p>
-          <p class="muted tiny">These notes use simple words to help you. A teacher can teach you more.</p>
-        </div>
-
-        <div class="card">
-          <h3>Listen and repeat</h3>
           <div class="player">
             <button id="btn-play" class="play-big" type="button" aria-label="Play">▶</button>
             <div class="player-main">
@@ -109,11 +148,14 @@
           </div>
           <audio id="audio-player" preload="metadata" class="sr-audio"></audio>
           <div class="audio-controls">
-            <button id="btn-rewind" class="btn secondary">⟲ Back 5 sec</button>
-            <button id="btn-loop" class="btn secondary" aria-pressed="false">🔁 Repeat: Off</button>
+            <button id="btn-prev" class="btn secondary" type="button">⏮ Back</button>
+            <button id="btn-rewind" class="btn secondary" type="button">⟲ 5 sec</button>
+            <button id="btn-next" class="btn secondary" type="button">Next ⏭</button>
+          </div>
+          <div class="audio-controls">
+            <button id="btn-loop" class="btn secondary" type="button" aria-pressed="false">🔁 Repeat: Off</button>
           </div>
           <p id="repeat-hint" class="muted tiny"></p>
-          <p id="practice-stats" class="practice-stats"></p>
           <div class="offline-row">
             <button id="btn-offline" class="btn secondary" type="button">📥 Save for no internet</button>
             <button id="btn-offline-remove" class="btn ghost" type="button" hidden>Remove from this phone</button>
@@ -130,114 +172,10 @@
         </div>
 
         <div class="card">
-          <h3>Verse by verse</h3>
-          <p id="verses-lang" class="muted tiny"></p>
-          <p id="verses-note" class="muted" hidden></p>
-          <div id="verses-list" class="verses-list">
-            <p class="muted">Loading verses…</p>
-          </div>
+          <h3>Read along</h3>
+          <p id="listen-verses-lang" class="muted tiny"></p>
+          <div id="listen-verses" class="verses-list"><p class="muted">Loading…</p></div>
         </div>
-
-        <div class="card">
-          <h3>Say it in your own words</h3>
-          <p class="muted">What does this surah mean to you? Write it the way you understand it.</p>
-          <textarea id="my-summary" class="note-box" rows="4" placeholder="This surah is about..."></textarea>
-          <p id="my-summary-status" class="muted tiny"></p>
-          <button id="btn-submit-words" class="btn primary" type="button">📨 Send my words for review</button>
-          <div id="review-box" class="review-box" hidden></div>
-          <p class="muted tiny">This is a simple check of your words against the main ideas of the surah. A teacher can check better.</p>
-        </div>
-
-        <div class="card">
-          <h3>Think about it</h3>
-          <p class="muted">Think about each question. Then write your answer.</p>
-          <div id="reflection-list" class="reflection-list"></div>
-        </div>
-
-        <div class="card">
-          <h3>How well can you say it from memory?</h3>
-          <p class="muted">Slide to show how good you are right now.</p>
-          <div class="level-row">
-            <span class="tiny muted">1</span>
-            <input id="level-slider" type="range" min="1" max="10" step="1" value="5">
-            <span class="tiny muted">10</span>
-          </div>
-          <p id="level-label" class="level-label">Not rated yet</p>
-        </div>
-
-        <div class="card" id="recitation-card">
-          <h3>Say it yourself</h3>
-          <p class="muted">When you are ready, record yourself saying the whole surah from memory. Then listen to ALL of your recording, from start to end. Skipping ahead will not let you go on.</p>
-          <div class="recitation-controls">
-            <button id="btn-record-recitation" class="btn secondary">🎙️ Start Recording</button>
-          </div>
-          <audio id="recitation-audio" controls class="full-audio" hidden></audio>
-          <p id="recitation-listen-note" class="muted" hidden></p>
-          <label class="recitation-confirm-row">
-            <input type="checkbox" id="recitation-confirm-checkbox" disabled>
-            <span>I listened to all of my recording and I am sure I said this surah the right way.</span>
-          </label>
-          <div class="learned-actions">
-            <button id="btn-mark-learned" class="btn primary" disabled>🎉 Mark this surah as learned</button>
-            <button id="btn-unlearn" class="btn ghost" hidden>Remove from Your Wins</button>
-          </div>
-          <p id="learned-status" class="muted"></p>
-        </div>
-
-      </div>
-    </section>
-
-    <!-- YOUR WINS TAB -->
-    <section id="tab-wins" class="tab-panel">
-      <div class="card">
-        <h2>Your Wins</h2>
-        <p class="muted">Everything you have finished so far.</p>
-        <div class="wins-totals">
-          <div class="win-tile"><div id="wins-learned" class="win-num">0</div><div class="win-label">Surahs learned</div></div>
-          <div class="win-tile"><div id="wins-time" class="win-num">0</div><div class="win-label">Practice time</div></div>
-          <div class="win-tile"><div id="wins-repeats" class="win-num">0</div><div class="win-label">Times repeated</div></div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="settings-row" style="border-bottom:none; padding-top:0;">
-          <div>
-            <h3 style="margin-bottom:2px;">This month</h3>
-            <p id="month-progress-text" class="muted"></p>
-          </div>
-          <select id="monthly-goal-select">
-            <option value="1">Goal: 1 surah</option>
-            <option value="2">Goal: 2 surahs</option>
-            <option value="3">Goal: 3 surahs</option>
-          </select>
-        </div>
-        <div class="progress-track">
-          <div class="progress-fill" id="month-progress-fill"></div>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>Surahs you have learned</h3>
-        <div id="wins-list" class="wins-list">
-          <p class="muted">No surahs learned yet. Your first win is waiting.</p>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>Still practicing</h3>
-        <div id="practicing-list" class="wins-list">
-          <p class="muted">Nothing yet.</p>
-        </div>
-      </div>
-    </section>
-
-    <!-- ALL SURAHS TAB -->
-    <section id="tab-surahs" class="tab-panel">
-      <div class="card">
-        <input id="surah-search" type="text" placeholder="Search surahs by name or number…" class="search-input">
-      </div>
-      <div id="surah-list" class="surah-grid">
-        <p class="muted">Loading surah list…</p>
       </div>
     </section>
 
@@ -248,7 +186,7 @@
         <div class="settings-row">
           <div>
             <strong>Quran translation</strong>
-            <p class="muted">Pick the language for the Quran words. The simple notes stay in simple English.</p>
+            <p class="muted">Pick the language for the Quran words. The meanings stay in simple English.</p>
           </div>
           <select id="language-select">
             <option value="en">English (simple)</option>
@@ -290,19 +228,10 @@
           <p id="offline-audio-summary" class="muted"></p>
           <button id="btn-clear-audio" class="btn ghost" type="button" hidden>Delete saved audio</button>
         </div>
-        <div class="settings-row" style="flex-direction:column; align-items:flex-start;">
-          <div style="margin-bottom:10px;">
-            <strong>Test your microphone</strong>
-            <p class="muted">Check that recording works on this phone. It does not change your progress.</p>
-          </div>
-          <button id="btn-test-mic" class="btn secondary">🎙️ Start Test Recording</button>
-          <p id="mic-test-status" class="muted"></p>
-          <audio id="test-mic-audio" controls class="full-audio" hidden></audio>
-        </div>
         <div class="settings-row">
           <div>
-            <strong>Reset everything</strong>
-            <p class="muted">Deletes this person's notes, wins and practice time.</p>
+            <strong>Start over</strong>
+            <p class="muted">Deletes everything this person learned and starts at the first ayah again.</p>
           </div>
           <button id="btn-reset-all" class="btn danger-ghost">Reset</button>
         </div>
@@ -315,6 +244,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="app.js?v=16"></script>
+<script src="app.js?v=17"></script>
 </body>
 </html>

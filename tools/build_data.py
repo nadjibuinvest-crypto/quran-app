@@ -3,7 +3,9 @@
 
 Run:  python3 tools/build_data.py
 Writes data/surahs.json, data/quran/<n>.json (Arabic, transliteration, English, Swahili,
-French) and data/notes-index.json (which surahs have simple verse notes).
+French), data/notes-index.json (which surahs have simple verse notes),
+data/meanings-index.json (which lessons have "what the Prophet and scholars said" notes in
+data/meanings/<n>.json) and data/study-order.json (Study order: shortest surahs first).
 Text comes from api.alquran.cloud (Tanzil text; see the credits in the app).
 """
 import json, os, urllib.request
@@ -45,6 +47,21 @@ def main():
     have = sorted(int(x[:-5]) for x in os.listdir(notes_dir) if x.endswith(".json")) if os.path.isdir(notes_dir) else []
     with open(os.path.join(ROOT, "data", "notes-index.json"), "w") as f:
         json.dump(have, f)
+    meanings_dir = os.path.join(ROOT, "data", "meanings")
+    meanings = sorted(int(x[:-5]) for x in os.listdir(meanings_dir) if x.endswith(".json")) if os.path.isdir(meanings_dir) else []
+    with open(os.path.join(ROOT, "data", "meanings-index.json"), "w") as f:
+        json.dump(meanings, f)
+    # Shortest first: fewest Arabic words in the whole surah, then fewest ayahs.
+    # The Bismillah (first 4 words) is not part of ayah 1, so it is not counted (Al-Fatiha and At-Tawbah excepted).
+    def count_words(i):
+        verses = list(books["ar"][i])
+        if i + 1 not in (1, 9) and len(verses[0].split()) > 4:
+            verses[0] = " ".join(verses[0].split()[4:])
+        return sum(len(t.split()) for t in verses)
+    words = {i + 1: count_words(i) for i in range(114)}
+    order = sorted(range(1, 115), key=lambda n: (words[n], surahs[n - 1]["numberOfAyahs"], n))
+    with open(os.path.join(ROOT, "data", "study-order.json"), "w") as f:
+        json.dump(order, f)
     print(f"ok: 114 surahs, {total} verses, notes for {len(have)} surahs")
 
 if __name__ == "__main__":

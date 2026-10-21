@@ -2,25 +2,23 @@
 // Every person on this phone gets their own set of keys, so progress never mixes.
 const PROFILES_KEY = 'qa_profiles';       // [{ id, name, pinHash }]
 const ACTIVE_KEY = 'qa_active_profile';   // id of the person using the app now
-const PROFILE_FIELDS = ['current', 'surahs', 'reciter', 'monthly_goal', 'loop', 'language'];
+const PROFILE_FIELDS = ['current', 'surahs', 'reciter', 'monthly_goal', 'loop', 'language', 'study', 'listen'];
 let activeProfileId = null;
 function profileKey(field) { return `qa_p${activeProfileId}_${field}`; }
 const LS = {
-  get current() { return profileKey('current'); },       // surah number being studied
-  get surahs() { return profileKey('surahs'); },         // per-surah progress, keyed by surah number
+  get study() { return profileKey('study'); },       // which ayahs this person has learned
   get reciter() { return profileKey('reciter'); },
-  get monthlyGoal() { return profileKey('monthly_goal'); },
   get loop() { return profileKey('loop'); },
-  get language() { return profileKey('language'); }   // en, sw or fr
+  get language() { return profileKey('language'); }, // en, sw or fr
+  get listen() { return profileKey('listen'); }      // last surah played in All Surahs
 };
-const OLD_KEYS = ['qa_plan', 'qa_completed'];
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DAILY_LIMIT = 2;       // new ayahs each day
+const REQUIRED_PLAYS = 10;   // plays needed for each ayah
 const $ = (id) => document.getElementById(id);
 
 let surahListCache = null;
 let surahInfoCache = null;
-let currentMeta = null;   // metadata of the surah open in Study tab
-let renderToken = 0;      // guards against slow loads landing on the wrong surah
 
 // ---------- Utilities ----------
 function loadJSON(key, fallback) {
@@ -32,7 +30,7 @@ function loadJSON(key, fallback) {
   }
 }
 function saveJSON(key, val) {
-  localStorage.setItem(key, JSON.stringify(val));
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { /* storage is full or off */ }
 }
 function formatLocalDate(d) {
   const y = d.getFullYear();
@@ -47,14 +45,16 @@ function dayOfYear(d) {
   const start = new Date(d.getFullYear(), 0, 0);
   return Math.floor((d - start) / DAY_MS);
 }
-function fmtDuration(sec) {
-  sec = Math.round(sec);
-  if (sec < 60) return `${sec} sec`;
-  const m = Math.floor(sec / 60);
-  if (m < 60) return `${m} min`;
-  const h = Math.floor(m / 60);
-  const rm = m % 60;
-  return rm ? `${h} h ${rm} min` : `${h} h`;
+function msUntilMidnight() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1) - now;
+}
+function fmtCountdown(ms) {
+  const t = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = t % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 // 'Meccan' and 'Medinan' are hard words, so say where the surah came down instead.
 function placeName(type) {
@@ -67,55 +67,32 @@ function el(tag, className, text) {
   return e;
 }
 
-// ---------- Per-surah progress ----------
-function allStates() {
-  return loadJSON(LS.surahs, {});
+// ---------- What this person has learned ----------
+// study.ayahs["108:1"] = { plays: 4, ok: true, done: "2026-10-20" }
+//   plays = times the ayah was played all the way through
+//   ok    = the question about the ayah was answered right
+//   done  = the day the person finished the ayah (it stays open until then, no matter how many days)
+function studyData() {
+  const d = loadJSON(LS.study, null);
+  return d && d.ayahs && typeof d.ayahs === 'object' ? d : { ayahs: {} };
 }
-function getState(n) {
-  const s = allStates()[n] || {};
-  return {
-    note: s.note || '',
-    reflections: Array.isArray(s.reflections) ? s.reflections : [],
-    level: s.level ?? null,
-    listenSeconds: s.listenSeconds || 0,
-    repeats: s.repeats || 0,
-    ayahLevels: s.ayahLevels && typeof s.ayahLevels === 'object' ? s.ayahLevels : {},
-    noteReview: s.noteReview || null,
-    learnedOn: s.learnedOn || null,
-    englishName: s.englishName || '',
-    arabicName: s.arabicName || ''
-  };
+function getAyahState(s, a) {
+  const x = studyData().ayahs[`${s}:${a}`] || {};
+  return { plays: x.plays || 0, ok: !!x.ok, done: x.done || null };
 }
-function setState(n, patch) {
-  const all = allStates();
-  all[n] = Object.assign({}, all[n] || {}, patch);
-  saveJSON(LS.surahs, all);
+function setAyahState(s, a, patch) {
+  const d = studyData();
+  const k = `${s}:${a}`;
+  d.ayahs[k] = Object.assign({}, d.ayahs[k] || {}, patch);
+  saveJSON(LS.study, d);
 }
-function currentSurahNumber() {
-  return parseInt(localStorage.getItem(LS.current) || '', 10) || null;
-}
-
-// Carry over progress saved by the old 14-day version of the app.
-function migrateOldData() {
-  const oldPlan = loadJSON('qa_plan', null);
-  const oldCompleted = loadJSON('qa_completed', null);
-  if (!oldPlan && !oldCompleted) return;
-  const all = allStates();
-  (oldCompleted || []).forEach(c => {
-    all[c.number] = Object.assign({}, all[c.number] || {}, {
-      learnedOn: c.finishedOn, englishName: c.englishName
-    });
-  });
-  saveJSON(LS.surahs, all);
-  if (oldPlan && !localStorage.getItem(LS.current)) {
-    localStorage.setItem(LS.current, String(oldPlan.number));
-  }
-  OLD_KEYS.forEach(k => localStorage.removeItem(k));
+function doneTodayCount() {
+  const t = todayStr();
+  return Object.values(studyData().ayahs).filter(x => x.done === t).length;
 }
 
 // ---------- People ----------
 let pendingProfile = null;
-let activeVerseRec = null;
 
 function getProfiles() { return loadJSON(PROFILES_KEY, []); }
 function saveProfiles(list) { saveJSON(PROFILES_KEY, list); }
@@ -152,7 +129,11 @@ function stopAllAudio() {
   audio.pause();
   audio.removeAttribute('src');
   delete audio.dataset.surah;
-  if (activeVerseRec) { activeVerseRec.cancel(); activeVerseRec = null; }
+  const ayah = $('ayah-audio');
+  ayah.pause();
+  ayah.removeAttribute('src');
+  delete ayah.dataset.key;
+  listenSurah = null;
 }
 
 function startApp(id) {
@@ -163,15 +144,14 @@ function startApp(id) {
   const person = activeProfile();
   $('person-name').textContent = person ? person.name : '';
   $('settings-person-name').textContent = person ? person.name : '';
-  migrateOldData();
   stopAllAudio();
   $('reciter-select').value = localStorage.getItem(LS.reciter) || 'Mishary Alafasy';
-  $('language-select').value = currentLanguage();
+  syncLanguageSelects();
   renderAyahOfTheDay();
   surahSearchQuery = '';
   $('surah-search').value = '';
+  showBrowse();
   switchTab('learn');
-  renderStudy();
   renderSurahGrid();
   renderOfflineTextStatus();
   renderOfflineSummary();
@@ -268,24 +248,21 @@ function initPeople() {
   $('profile-name-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveNewPerson(); });
 }
 
+
 // ---------- Tabs ----------
 function initTabs() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
-  $('btn-goto-surahs').addEventListener('click', () => switchTab('surahs'));
 }
 function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
+  if (tab === 'learn') renderStudy();
   if (tab === 'wins') renderWins();
-  if (tab === 'surahs') renderSurahGrid();
+  if (tab === 'surahs' && !listenSurah) renderSurahGrid();
+  if (tab !== 'learn') { clearInterval(lockTimer); lockTimer = null; }
   window.scrollTo(0, 0);
-}
-function openSurah(n) {
-  localStorage.setItem(LS.current, String(n));
-  switchTab('learn');
-  renderStudy();
 }
 
 // The Arabic data source puts the Bismillah in front of ayah 1 of most surahs.
@@ -298,6 +275,7 @@ function stripBismillah(text, surahNumber, ayahNumber) {
   }
   return text;
 }
+
 
 // ---------- Data ----------
 // Everything that is loaded is also kept on the phone, so a surah you have
@@ -312,6 +290,18 @@ const LANGUAGES = {
 function currentLanguage() {
   const l = localStorage.getItem(LS.language);
   return LANGUAGES[l] ? l : 'en';
+}
+function syncLanguageSelects() {
+  const l = currentLanguage();
+  $('language-select').value = l;
+  $('listen-language-select').value = l;
+}
+function setLanguage(l) {
+  localStorage.setItem(LS.language, l);
+  syncLanguageSelects();
+  renderAyahOfTheDay();
+  if (listenSurah) renderListenVerses(listenSurah);
+  if ($('tab-learn').classList.contains('active')) renderStudy();
 }
 
 async function fetchJSONCached(url) {
@@ -334,6 +324,15 @@ const INFO_URL = 'data/surah-info.json?v=2';
 const QURAN_URL = (n) => `data/quran/${n}.json?v=1`;
 const NOTES_URL = (n) => `data/ayah-simple/${n}.json?v=3`;
 const NOTES_INDEX_URL = 'data/notes-index.json?v=1';
+const STUDY_ORDER_URL = 'data/study-order.json?v=1';
+const MEANINGS_INDEX_URL = 'data/meanings-index.json?v=1';
+const MEANINGS_URL = (n) => `data/meanings/${n}.json?v=1`;
+// Old books, only for lessons that have no prepared notes yet. Shown in the books' own words.
+const BOOKS = [
+  { slug: 'en-al-jalalayn', name: 'Tafsir al-Jalalayn' },
+  { slug: 'en-tafsir-ibn-abbas', name: 'Tanwir al-Miqbas (from Ibn Abbas)' }
+];
+const BOOK_URL = (slug, n) => `https://cdn.jsdelivr.net/gh/spa5k/tafsir_api@main/tafsir/${slug}/${n}.json`;
 
 async function getSurahList() {
   if (surahListCache) return surahListCache;
@@ -354,7 +353,7 @@ async function getSurahText(n) {
   return { arabic: wrap(q.ar), translation: wrap(q[currentLanguage()] || q.en), transliteration: wrap(q.tl) };
 }
 
-// Plain-English summary + reflection questions for all 114 surahs.
+// Plain-English summary for all 114 surahs.
 async function getSurahInfo(n) {
   if (!surahInfoCache) surahInfoCache = await fetchJSONCached(INFO_URL);
   return surahInfoCache.find(i => i.n === n) || null;
@@ -369,19 +368,69 @@ async function getSimpleAyahs(n) {
   }
 }
 
+// What the Prophet ﷺ and the scholars said about each ayah, in simple words.
+// Only the lessons that were prepared have this (see data/meanings-index.json).
+let meaningsIndexCache = null;
+async function getMeanings(n) {
+  try {
+    if (!meaningsIndexCache) meaningsIndexCache = await fetchJSONCached(MEANINGS_INDEX_URL);
+    if (!meaningsIndexCache.includes(n)) return null;
+    return (await fetchJSONCached(MEANINGS_URL(n))).ayahs;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Live text from the old books (for lessons with no prepared notes). It is in the books' own, harder words.
+async function getBookText(slug, n, a) {
+  const data = await fetchJSONCached(BOOK_URL(slug, n));
+  const row = (data.ayahs || []).find(x => x.ayah === a);
+  return row ? (row.text || '').trim() : '';
+}
+
+let studyOrderCache = null;
+async function getStudyOrder() {
+  if (studyOrderCache) return studyOrderCache;
+  try {
+    studyOrderCache = await fetchJSONCached(STUDY_ORDER_URL);
+  } catch (e) {
+    studyOrderCache = Array.from({ length: 114 }, (_, i) => 114 - i);
+  }
+  return studyOrderCache;
+}
+
 // ---------- Audio (also saved for no internet) ----------
 const AUDIO_BASE = 'https://download.quranicaudio.com/quran/mishaari_raashid_al_3afaasee/';
 function audioUrl(n) { return AUDIO_BASE + String(n).padStart(3, '0') + '.mp3'; }
 function backupAudioUrl(n) { return `https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/${n}.mp3`; }
-let audioObjectUrl = null;
+// One ayah on its own (a few seconds, so it is easy to save for no internet).
+function ayahId(s, a) { return String(s).padStart(3, '0') + String(a).padStart(3, '0'); }
+function ayahAudioUrl(s, a) { return `https://everyayah.com/data/Alafasy_128kbps/${ayahId(s, a)}.mp3`; }
+function backupAyahAudioUrl(s, a) { return `https://verses.quran.com/Alafasy/mp3/${ayahId(s, a)}.mp3`; }
 
-let autoplayNext = false;
-function playSurah(next) {
-  if (next < 1 || next > 114) return;
-  autoplayNext = true;
-  localStorage.setItem(LS.current, String(next));
-  renderStudy();
+async function cacheAyahAudio(s, a) {
+  if (!navigator.onLine || !('caches' in window)) return;
+  try {
+    const c = await caches.open(AUDIO_CACHE);
+    const url = ayahAudioUrl(s, a);
+    if (await c.match(url)) return;
+    const res = await fetch(url);
+    if (res.ok) await c.put(url, res);
+  } catch (e) { /* it will play from the internet instead */ }
 }
+// Save the next few lessons' audio while there is internet, so they work on a plane.
+async function prefetchAhead(count) {
+  if (!navigator.onLine) return;
+  try {
+    const next = await nextAyahs(count);
+    for (const x of next) await cacheAyahAudio(x.s, x.a);
+  } catch (e) { /* ignore */ }
+}
+
+let audioObjectUrl = null;
+let ayahObjectUrl = null;
+let autoplayNext = false;
+let listenSurah = null;
 
 // Shows the surah name and next/back buttons on the phone's lock screen.
 function updateMediaSession(n) {
@@ -393,8 +442,8 @@ function updateMediaSession(n) {
       artist: 'Mishary Alafasy',
       album: 'LP Quran'
     });
-    navigator.mediaSession.setActionHandler('nexttrack', n < 114 ? () => playSurah(n + 1) : null);
-    navigator.mediaSession.setActionHandler('previoustrack', n > 1 ? () => playSurah(n - 1) : null);
+    navigator.mediaSession.setActionHandler('nexttrack', n < 114 ? () => showListen(n + 1, true) : null);
+    navigator.mediaSession.setActionHandler('previoustrack', n > 1 ? () => showListen(n - 1, true) : null);
   } catch (e) { /* not supported */ }
 }
 
@@ -416,6 +465,7 @@ async function setSurahAudio(n) {
   updateMediaSession(n);
   if (autoplayNext) {
     autoplayNext = false;
+    $('ayah-audio').pause();
     audio.play().catch(() => {});
   }
 }
@@ -431,12 +481,12 @@ async function isSavedOffline(n) {
 
 async function renderOfflineState(n) {
   const saved = await isSavedOffline(n);
-  if (currentSurahNumber() !== n) return;
+  if (listenSurah !== n) return;
   $('btn-offline').hidden = saved;
   $('btn-offline-remove').hidden = !saved;
   $('offline-status').textContent = saved
     ? '✓ Saved on this phone. It works with no internet.'
-    : 'Save this surah on your phone to listen and read with no internet.';
+    : 'Save this surah on your phone to listen with no internet.';
 }
 
 async function downloadSurahAudio(n, onProgress) {
@@ -519,8 +569,7 @@ async function saveShortSurahsOffline() {
   }
   btn.disabled = false;
   renderOfflineSummary();
-  const cur = currentSurahNumber();
-  if (cur) renderOfflineState(cur);
+  if (listenSurah) renderOfflineState(listenSurah);
 }
 
 async function renderOfflineSummary() {
@@ -528,15 +577,18 @@ async function renderOfflineSummary() {
   try {
     const ac = await caches.open(AUDIO_CACHE);
     const keys = await ac.keys();
+    const surahKeys = keys.filter(k => k.url.startsWith(AUDIO_BASE));
+    const ayahCount = keys.length - surahKeys.length;
     let bytes = 0;
-    for (const k of keys) {
+    for (const k of surahKeys) {
       const r = await ac.match(k);
       const len = parseInt((r && r.headers.get('content-length')) || '0', 10);
       bytes += len || (r ? (await r.blob()).size : 0);
     }
-    box.textContent = keys.length
-      ? `Saved for listening: ${keys.length} ${keys.length === 1 ? 'surah' : 'surahs'} (${Math.round(bytes / 1048576)} MB).`
-      : 'No audio is saved on this phone yet.';
+    const parts = [];
+    if (surahKeys.length) parts.push(`${surahKeys.length} ${surahKeys.length === 1 ? 'surah' : 'surahs'} (${Math.round(bytes / 1048576)} MB)`);
+    if (ayahCount) parts.push(`${ayahCount} single ${ayahCount === 1 ? 'ayah' : 'ayahs'} for Study`);
+    box.textContent = parts.length ? `Saved for listening: ${parts.join(' and ')}.` : 'No audio is saved on this phone yet.';
     $('btn-clear-audio').hidden = !keys.length;
   } catch (e) {
     box.textContent = '';
@@ -547,14 +599,13 @@ async function clearSavedAudio() {
   if (!confirm('Delete all the saved audio from this phone? You can save it again later.')) return;
   try { await caches.delete(AUDIO_CACHE); } catch (e) { /* ignore */ }
   renderOfflineSummary();
-  const cur = currentSurahNumber();
-  if (cur) renderOfflineState(cur);
+  if (listenSurah) renderOfflineState(listenSurah);
 }
 
 // ---------- Get the whole app ready for no internet ----------
 // The first time the app is opened with internet, all 114 surahs (words in every
-// language, the notes and the questions) are saved on the phone in the background.
-const TEXT_FLAG = 'qa_text_saved_v1';   // for this phone, not for one person
+// language, the notes and the lesson meanings) are saved on the phone in the background.
+const TEXT_FLAG = 'qa_text_saved_v2';   // for this phone, not for one person
 let preparingOffline = false;
 let toastTimer = null;
 
@@ -571,7 +622,7 @@ function renderOfflineTextStatus() {
   const appSaved = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
   const textSaved = localStorage.getItem(TEXT_FLAG) === 'done';
   if (appSaved && textSaved) {
-    box.textContent = '✓ Ready. The app and all 114 surahs (the words, notes and questions) are saved on this phone. They work with no internet, even on a plane.';
+    box.textContent = '✓ Ready. The app, all 114 surahs and your lessons are saved on this phone. They work with no internet, even on a plane.';
   } else if (!navigator.onLine) {
     box.textContent = 'You have no internet right now. Open the app once with internet and it will get ready.';
   } else if (!appSaved) {
@@ -582,16 +633,22 @@ function renderOfflineTextStatus() {
 }
 
 async function prepareOffline() {
-  if (preparingOffline || !('caches' in window)) return;
+  if (!('caches' in window)) return;
+  // Study audio is small. Keep the next few lessons saved every time the app opens.
+  prefetchAhead(10).then(renderOfflineSummary);
+  if (preparingOffline) return;
   if (localStorage.getItem(TEXT_FLAG) === 'done') { renderOfflineTextStatus(); return; }
   if (!navigator.onLine) { renderOfflineTextStatus(); return; }
   preparingOffline = true;
   try {
     let notes = [];
+    let meanings = [];
     try { notes = await fetchJSONCached(NOTES_INDEX_URL); } catch (e) { /* no notes list */ }
-    const urls = [SURAHS_URL, INFO_URL];
+    try { meanings = await fetchJSONCached(MEANINGS_INDEX_URL); } catch (e) { /* no meanings list */ }
+    const urls = [SURAHS_URL, INFO_URL, STUDY_ORDER_URL];
     for (let n = 1; n <= 114; n++) urls.push(QURAN_URL(n));
     notes.forEach(n => urls.push(NOTES_URL(n)));
+    meanings.forEach(n => urls.push(MEANINGS_URL(n)));
     const cache = await caches.open(DATA_CACHE);
     const queue = urls.slice();
     let done = 0;
@@ -630,7 +687,9 @@ async function removeOffline(n) {
     await c.delete(audioUrl(n));
   } catch (e) { /* ignore */ }
   await renderOfflineState(n);
+  renderOfflineSummary();
 }
+
 
 // ---------- Verse of the Day ----------
 // Each entry points to a real verse (loaded live so the Arabic is exact), then adds
@@ -691,30 +750,527 @@ async function renderAyahOfTheDay() {
   }
 }
 
-// ---------- All Surahs Tab ----------
+
+// ---------- Study Tab ----------
+// 2 new ayahs a day. The next ayah only opens after the one before it is finished:
+// played 10 times, the question answered, and "I understand" tapped.
+// Time does not open anything by itself. If it takes 3 days, it takes 3 days.
+let studyToken = 0;
+let studyDay = '';
+let lockTimer = null;
+const cardRefresh = new Map();   // "108:1" -> function that redraws that card's play count
+const notesCache = new Map();
+
+async function simpleNotes(n) {
+  if (!notesCache.has(n)) notesCache.set(n, await getSimpleAyahs(n));
+  return notesCache.get(n);
+}
+
+// The next ayahs that are not finished yet, in order (shortest surahs first).
+async function nextAyahs(count) {
+  const [order, list] = await Promise.all([getStudyOrder(), getSurahList()]);
+  const learned = studyData().ayahs;
+  const out = [];
+  for (const s of order) {
+    const total = list[s - 1].numberOfAyahs;
+    for (let a = 1; a <= total; a++) {
+      const st = learned[`${s}:${a}`];
+      if (!(st && st.done)) {
+        out.push({ s, a });
+        if (out.length >= count) return out;
+      }
+    }
+  }
+  return out;
+}
+
+function seededShuffle(arr, seed) {
+  const a = arr.slice();
+  let x = (Math.abs(seed) % 2147483646) + 1;
+  for (let i = a.length - 1; i > 0; i--) {
+    x = (x * 16807) % 2147483647;
+    const j = x % (i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// The question: "What is this ayah about?" One right answer and two from other ayahs.
+const QUIZ_POOL = [108, 103, 112, 106, 110, 114, 105, 111, 113, 107, 109, 102, 101, 100, 99, 97, 94, 93, 92, 91];
+async function blurbList(t, kind) {
+  if (kind === 'note') return (await simpleNotes(t)) || [];
+  const q = await getQuranFile(t);
+  return q[currentLanguage()] || q.en;
+}
+async function buildQuiz(s, a) {
+  const notes = await simpleNotes(s);
+  const kind = notes && notes[a - 1] ? 'note' : 'words';
+  const right = (await blurbList(s, kind))[a - 1];
+  const cands = [];
+  for (const t of [s].concat(QUIZ_POOL.filter(x => x !== s))) {
+    const arr = await blurbList(t, kind);
+    arr.forEach((text, i) => {
+      if (t === s && i === a - 1) return;
+      if (text && text !== right && !cands.includes(text)) cands.push(text);
+    });
+    if (cands.length >= 6) break;
+  }
+  const wrong = seededShuffle(cands, s * 1000 + a).slice(0, 2);
+  const options = seededShuffle([right].concat(wrong), s * 31 + a * 7 + 3);
+  return { options, answer: options.indexOf(right), kind };
+}
+
+function ytLink(label, query) {
+  const a = el('a', 'btn ghost', label);
+  a.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  return a;
+}
+
+function fillList(parent, items) {
+  const ul = el('ul', 'meaning-list');
+  items.forEach(t => ul.append(el('li', '', t)));
+  parent.append(ul);
+}
+
+// The meanings: simple words, what the Prophet ﷺ said, what scholars wrote.
+async function buildMeaning(s, a, meta) {
+  const box = el('div', 'ayah-meaning');
+  box.append(el('h4', '', 'What this ayah means'));
+  const notes = await simpleNotes(s);
+  if (notes && notes[a - 1]) {
+    const simple = el('div', 'verse-simple');
+    simple.append(el('b', '', 'In simple words: '), document.createTextNode(notes[a - 1]));
+    box.append(simple);
+  }
+  const meanings = await getMeanings(s);
+  const m = meanings && meanings[a - 1];
+  if (m) {
+    const p = el('div', 'meaning-block');
+    p.append(el('h5', '', 'What the Prophet ﷺ said'));
+    if (m.prophet && m.prophet.length) fillList(p, m.prophet);
+    else p.append(el('p', 'muted tiny', 'The books we used do not tell a hadith about this ayah.'));
+    box.append(p);
+    const sc = el('div', 'meaning-block');
+    sc.append(el('h5', '', 'What the scholars wrote'));
+    if (m.scholars && m.scholars.length) fillList(sc, m.scholars);
+    else sc.append(el('p', 'muted tiny', 'Nothing more was written about this one.'));
+    box.append(sc);
+    box.append(el('p', 'muted tiny', 'These notes tell what the old books say, in simple words. Each note names its book. A teacher can tell you more.'));
+  } else {
+    if (!(notes && notes[a - 1])) box.append(el('p', 'muted', 'Simple words for this ayah are not ready yet. Read the Quran words above, then open the book notes below.'));
+    const det = el('details', 'book-notes');
+    det.append(el('summary', '', 'Book notes (in the books\' own, harder words)'));
+    const inner = el('div', 'book-inner');
+    det.append(inner);
+    let loaded = false;
+    det.addEventListener('toggle', async () => {
+      if (!det.open || loaded) return;
+      loaded = true;
+      inner.textContent = 'Loading…';
+      const parts = [];
+      for (const b of BOOKS) {
+        try {
+          const t = await getBookText(b.slug, s, a);
+          if (t) parts.push({ name: b.name, text: t });
+        } catch (e) { /* offline */ }
+      }
+      inner.textContent = '';
+      if (!parts.length) {
+        loaded = false;
+        inner.append(el('p', 'muted', 'The book notes need internet the first time. Try again when you are online.'));
+        return;
+      }
+      parts.forEach(x => {
+        const p = el('p', 'book-text');
+        p.append(el('b', '', x.name + ': '), document.createTextNode(x.text));
+        inner.append(p);
+      });
+    });
+    box.append(det);
+  }
+  return box;
+}
+
+async function buildAyahCard(s, a, mode) {
+  const [q, list] = await Promise.all([getQuranFile(s), getSurahList()]);
+  const meta = list[s - 1];
+  const key = `${s}:${a}`;
+  const isDone = mode === 'done';
+  const card = el('div', 'card ayah-card' + (isDone ? ' ayah-done' : ''));
+
+  const head = el('div', 'ayah-head');
+  head.append(el('span', 'verse-num', `Surah ${meta.englishName} · Ayah ${a} of ${meta.numberOfAyahs}`));
+  if (isDone) head.append(el('span', 'chip chip-done', '✓ Learned'));
+  card.append(head);
+  card.append(el('div', 'verse-arabic', stripBismillah(q.ar[a - 1], s, a)));
+  card.append(el('div', 'verse-translit', q.tl[a - 1]));
+  card.append(el('div', 'verse-translation', (q[currentLanguage()] || q.en)[a - 1]));
+
+  // Play only this ayah, and count the plays.
+  const playRow = el('div', 'ayah-play-row');
+  const playBtn = el('button', 'btn primary ayah-play-btn', '▶ Play this ayah');
+  playBtn.type = 'button';
+  playBtn.dataset.key = key;
+  playBtn.addEventListener('click', () => playAyah(s, a));
+  const count = el('div', 'ayah-count');
+  playRow.append(playBtn, count);
+  card.append(playRow);
+  const track = el('div', 'progress-track');
+  const fill = el('div', 'progress-fill');
+  track.append(fill);
+  card.append(track);
+
+  let finishBtn = null;
+  let finishHint = null;
+  const refresh = () => {
+    const st = getAyahState(s, a);
+    const n = Math.min(st.plays, REQUIRED_PLAYS);
+    count.textContent = isDone
+      ? `Played ${st.plays} ${st.plays === 1 ? 'time' : 'times'}`
+      : (st.plays >= REQUIRED_PLAYS ? `✓ Played ${st.plays} times` : `Played ${st.plays} of ${REQUIRED_PLAYS} times`);
+    fill.style.width = `${(n / REQUIRED_PLAYS) * 100}%`;
+    if (finishBtn) {
+      const ready = st.plays >= REQUIRED_PLAYS && st.ok;
+      finishBtn.disabled = !ready;
+      const todo = [];
+      if (st.plays < REQUIRED_PLAYS) todo.push(`play it ${REQUIRED_PLAYS - st.plays} more ${REQUIRED_PLAYS - st.plays === 1 ? 'time' : 'times'}`);
+      if (!st.ok) todo.push('answer the question');
+      finishHint.textContent = ready ? 'You did it all. Tap the button.' : `To open the next ayah: ${todo.join(' and ')}.`;
+    }
+  };
+  cardRefresh.set(key, refresh);
+
+  if (isDone) {
+    refresh();
+    syncPlayButtons();
+    return card;
+  }
+
+  card.append(await buildMeaning(s, a, meta));
+
+  const links = el('div', 'audio-buttons');
+  links.append(
+    ytLink('▶ Watch about this ayah', `Surah ${meta.englishName} ayah ${a} meaning and story`),
+    ytLink('▶ Story of this surah', `Surah ${meta.englishName} story explained for kids`)
+  );
+  card.append(links);
+
+  // The question
+  const quizBox = el('div', 'quiz');
+  quizBox.append(el('h4', '', 'Question: what is this ayah about?'));
+  const quiz = await buildQuiz(s, a);
+  const msg = el('p', 'quiz-msg');
+  const opts = quiz.options.map((text, i) => {
+    const b = el('button', 'quiz-opt', text);
+    b.type = 'button';
+    b.addEventListener('click', () => {
+      if (i === quiz.answer) {
+        setAyahState(s, a, { ok: true });
+        showSolved();
+        refresh();
+      } else {
+        b.classList.add('wrong');
+        b.disabled = true;
+        msg.textContent = 'Not quite. Read what the ayah means, then try again.';
+      }
+    });
+    return b;
+  });
+  function showSolved() {
+    opts.forEach((b, i) => { b.disabled = true; b.classList.toggle('right', i === quiz.answer); b.classList.remove('wrong'); });
+    msg.textContent = '✓ Yes, that is right!';
+  }
+  opts.forEach(b => quizBox.append(b));
+  quizBox.append(msg);
+  card.append(quizBox);
+  if (getAyahState(s, a).ok) showSolved();
+
+  // Finish
+  const fin = el('div', 'finish-box');
+  finishBtn = el('button', 'btn primary finish-btn', '✓ I understand this ayah');
+  finishBtn.type = 'button';
+  finishHint = el('p', 'muted tiny');
+  finishBtn.addEventListener('click', () => finishAyah(s, a, meta));
+  fin.append(finishBtn, finishHint);
+  card.append(fin);
+
+  refresh();
+  syncPlayButtons();
+  return card;
+}
+
+function finishAyah(s, a, meta) {
+  const st = getAyahState(s, a);
+  if (st.plays < REQUIRED_PLAYS || !st.ok) return;
+  setAyahState(s, a, { done: todayStr(), at: Date.now() });
+  $('ayah-audio').pause();
+  const total = meta.numberOfAyahs;
+  let all = true;
+  for (let i = 1; i <= total; i++) if (!getAyahState(s, i).done) { all = false; break; }
+  showToast(all ? `🎉 You learned all of Surah ${meta.englishName}!` : '✓ Ayah learned!', 4000);
+  renderStudy();
+  window.scrollTo(0, 0);
+}
+
+function lockedCard(s, a, meta) {
+  const card = el('div', 'card ayah-locked');
+  card.append(el('div', 'lock-icon', '🔒'));
+  const t = el('div', '');
+  t.append(el('b', '', `Next: Surah ${meta.englishName}, ayah ${a}`));
+  t.append(el('p', 'muted', 'This one opens after you finish the ayah above.'));
+  card.append(t);
+  return card;
+}
+
+function renderTodayBar(doneToday, learnedTotal) {
+  const dots = $('today-dots');
+  dots.innerHTML = '';
+  for (let i = 0; i < DAILY_LIMIT; i++) dots.append(el('span', 'dot' + (i < doneToday ? ' on' : '')));
+  $('today-text').textContent = doneToday >= DAILY_LIMIT
+    ? `Today: ${DAILY_LIMIT} of ${DAILY_LIMIT} ayahs learned. Well done!`
+    : `Today: ${doneToday} of ${DAILY_LIMIT} ayahs learned`;
+}
+
+async function renderStudy() {
+  const token = ++studyToken;
+  studyDay = todayStr();
+  clearInterval(lockTimer);
+  lockTimer = null;
+  cardRefresh.clear();
+  const body = $('study-body');
+  const doneToday = doneTodayCount();
+  const left = Math.max(0, DAILY_LIMIT - doneToday);
+  renderTodayBar(doneToday);
+
+  let upcoming = [];
+  let list = null;
+  try {
+    list = await getSurahList();
+    upcoming = await nextAyahs(Math.max(left, 1));
+  } catch (e) {
+    if (token !== studyToken) return;
+    body.innerHTML = '';
+    body.append(el('div', 'card', 'Could not load the lessons. Open the app once with internet.'));
+    return;
+  }
+  if (token !== studyToken) return;
+
+  const nodes = [];
+  const todayCards = Object.entries(studyData().ayahs)
+    .filter(([, v]) => v.done === todayStr())
+    .sort((x, y) => (x[1].at || 0) - (y[1].at || 0))
+    .map(([k]) => k.split(':').map(Number));
+
+  if (!upcoming.length) {
+    const c = el('div', 'card empty-state');
+    c.append(el('h2', '', '🎉 You finished every lesson!'), el('p', 'muted', 'You learned all the ayahs, one by one. Use All Surahs to listen anytime.'));
+    nodes.push(c);
+  } else if (left === 0) {
+    const nx = upcoming[0];
+    const c = el('div', 'card lock-card');
+    c.append(el('div', 'lock-big', '🔒'));
+    c.append(el('h2', '', `You learned your ${DAILY_LIMIT} ayahs today!`));
+    c.append(el('p', 'muted', 'The next ayahs open tomorrow. Rest, and say them again in your head.'));
+    const timer = el('div', 'lock-timer');
+    timer.id = 'lock-timer';
+    timer.textContent = fmtCountdown(msUntilMidnight());
+    c.append(timer, el('p', 'muted tiny', `Opens in hours : minutes : seconds. Next: Surah ${list[nx.s - 1].englishName}, ayah ${nx.a}.`));
+    nodes.push(c);
+    const day = todayStr();
+    lockTimer = setInterval(() => {
+      if (todayStr() !== day) { renderStudy(); return; }
+      const t = $('lock-timer');
+      if (t) t.textContent = fmtCountdown(msUntilMidnight());
+    }, 1000);
+  } else {
+    const first = upcoming[0];
+    // About this surah, in simple words
+    const info = await getSurahInfo(first.s).catch(() => null);
+    if (token !== studyToken) return;
+    if (info) {
+      const det = el('details', 'card surah-intro');
+      det.open = first.a === 1;
+      det.append(el('summary', '', `About Surah ${list[first.s - 1].englishName}`));
+      det.append(el('p', 'about-text', info.summary));
+      nodes.push(det);
+    }
+    nodes.push(await buildAyahCard(first.s, first.a, 'active'));
+    if (left >= 2 && upcoming[1]) nodes.push(lockedCard(upcoming[1].s, upcoming[1].a, list[upcoming[1].s - 1]));
+  }
+
+  if (todayCards.length) {
+    const h = el('h3', 'section-title', 'Learned today');
+    nodes.push(h);
+    for (const [s, a] of todayCards) nodes.push(await buildAyahCard(s, a, 'done'));
+  }
+  if (token !== studyToken) return;
+  body.innerHTML = '';
+  nodes.forEach(n => body.append(n));
+  syncPlayButtons();
+  prefetchAhead(10);
+}
+
+// ---------- Playing one ayah ----------
+async function playAyah(s, a) {
+  const au = $('ayah-audio');
+  const key = `${s}:${a}`;
+  if (au.dataset.key === key && au.src) {
+    if (!au.paused) { au.pause(); return; }
+    if (!au.ended && au.currentTime > 0) { au.play().catch(() => {}); return; }
+  }
+  $('audio-player').pause();
+  au.pause();
+  au.dataset.key = key;
+  au.dataset.failedOver = '';
+  if (ayahObjectUrl) { URL.revokeObjectURL(ayahObjectUrl); ayahObjectUrl = null; }
+  let src = ayahAudioUrl(s, a);
+  try {
+    const c = await caches.open(AUDIO_CACHE);
+    const hit = await c.match(src);
+    if (hit) { ayahObjectUrl = URL.createObjectURL(await hit.blob()); src = ayahObjectUrl; }
+  } catch (e) { /* play from the internet */ }
+  if (au.dataset.key !== key) return;
+  au.src = src;
+  au.play().catch(() => {});
+  if (!src.startsWith('blob:')) cacheAyahAudio(s, a);
+}
+
+function syncPlayButtons() {
+  const au = $('ayah-audio');
+  document.querySelectorAll('.ayah-play-btn').forEach(b => {
+    const on = au.dataset.key === b.dataset.key && !au.paused && !au.ended;
+    b.textContent = on ? '⏸ Pause' : '▶ Play this ayah';
+  });
+}
+
+function initAyahAudio() {
+  const au = $('ayah-audio');
+  au.addEventListener('play', () => { $('audio-player').pause(); syncPlayButtons(); });
+  au.addEventListener('pause', syncPlayButtons);
+  au.addEventListener('ended', () => {
+    const key = au.dataset.key;
+    if (!key) return;
+    const [s, a] = key.split(':').map(Number);
+    const plays = getAyahState(s, a).plays + 1;
+    setAyahState(s, a, { plays });
+    if (plays === REQUIRED_PLAYS) showToast(`✓ You played it ${REQUIRED_PLAYS} times!`, 3000);
+    const f = cardRefresh.get(key);
+    if (f) f();
+    syncPlayButtons();
+  });
+  // If the main server cannot be reached, try the backup one once.
+  au.addEventListener('error', () => {
+    const key = au.dataset.key;
+    if (!key || !au.src) return;
+    const [s, a] = key.split(':').map(Number);
+    if (!navigator.onLine && !au.src.startsWith('blob:')) {
+      showToast('No internet. Open this lesson once with internet and its audio will be saved.', 4000);
+      return;
+    }
+    if (au.dataset.failedOver === '1' || au.src.startsWith('blob:')) return;
+    au.dataset.failedOver = '1';
+    au.src = backupAyahAudioUrl(s, a);
+    au.load();
+    au.play().catch(() => {});
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && activeProfileId && todayStr() !== studyDay && $('tab-learn').classList.contains('active')) renderStudy();
+  });
+}
+
+
+// ---------- Your Wins Tab ----------
+// Only what you learned: "You have learned 4 of 6 ayahs in Surah An-Nas".
+function rangeText(nums) {
+  const a = nums.slice().sort((x, y) => x - y);
+  const parts = [];
+  let i = 0;
+  while (i < a.length) {
+    let j = i;
+    while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++;
+    parts.push(j > i + 1 ? `${a[i]}–${a[j]}` : a.slice(i, j + 1).join(', '));
+    i = j + 1;
+  }
+  return parts.join(', ');
+}
+
+async function renderWins() {
+  let list = null;
+  try { list = await getSurahList(); } catch (e) { /* use numbers only */ }
+  const bySurah = new Map();
+  const days = new Set();
+  let total = 0;
+  Object.entries(studyData().ayahs).forEach(([k, v]) => {
+    if (!v.done) return;
+    const [s, a] = k.split(':').map(Number);
+    total++;
+    days.add(v.done);
+    const row = bySurah.get(s) || { s, ayahs: [], last: 0 };
+    row.ayahs.push(a);
+    row.last = Math.max(row.last, v.at || 0, row.last);
+    row.lastDay = !row.lastDay || v.done > row.lastDay ? v.done : row.lastDay;
+    bySurah.set(s, row);
+  });
+  const rows = [...bySurah.values()].sort((x, y) => (y.lastDay || '').localeCompare(x.lastDay || '') || y.last - x.last);
+  const finished = rows.filter(r => list && r.ayahs.length === list[r.s - 1].numberOfAyahs).length;
+
+  $('wins-ayahs').textContent = total;
+  $('wins-surahs').textContent = finished;
+  $('wins-days').textContent = days.size;
+
+  const box = $('wins-list');
+  box.innerHTML = '';
+  if (!rows.length) {
+    box.append(el('p', 'muted', 'Nothing yet. Your first ayah is waiting in the Study tab.'));
+    return;
+  }
+  rows.forEach(r => {
+    const meta = list ? list[r.s - 1] : null;
+    const row = el('div', 'win-row');
+    row.append(el('span', 'win-name', `Surah ${meta ? meta.englishName : r.s}`));
+    const of = meta ? ` of ${meta.numberOfAyahs}` : '';
+    const doneAll = meta && r.ayahs.length === meta.numberOfAyahs;
+    row.append(el('span', 'win-detail' + (doneAll ? ' win-all' : ''),
+      doneAll ? `✓ You learned all ${meta.numberOfAyahs} ayahs` : `You have learned ${r.ayahs.length}${of} ${r.ayahs.length === 1 && !meta ? 'ayah' : 'ayahs'}`));
+    row.append(el('span', 'muted tiny', `Ayah ${rangeText(r.ayahs)}`));
+    box.append(row);
+  });
+}
+
+// ---------- All Surahs Tab: just listen ----------
 let surahSearchQuery = '';
+
+function showBrowse() {
+  $('surah-browse').hidden = false;
+  $('surah-listen').hidden = true;
+  renderNowPlaying();
+}
 
 async function renderSurahGrid() {
   const container = $('surah-list');
   try {
     const list = await getSurahList();
-    const states = allStates();
-    const current = currentSurahNumber();
+    const learned = {};
+    Object.entries(studyData().ayahs).forEach(([k, v]) => {
+      if (v.done) { const s = k.split(':')[0]; learned[s] = (learned[s] || 0) + 1; }
+    });
     container.innerHTML = '';
     list.forEach(s => {
-      const st = states[s.number] || {};
       const q = surahSearchQuery;
       const match = !q || s.englishName.toLowerCase().includes(q) ||
         s.englishNameTranslation.toLowerCase().includes(q) || String(s.number).includes(q);
       if (!match) return;
-      const card = el('div', 'surah-card' + (current === s.number ? ' current' : ''));
+      const card = el('div', 'surah-card' + (listenSurah === s.number ? ' current' : ''));
       const top = el('div', 'sc-top');
       top.append(el('span', 'sc-num', `#${s.number}`), el('span', 'sc-arabic', s.name));
       card.append(top, el('div', 'sc-name', s.englishName), el('div', 'muted', s.englishNameTranslation));
       card.append(el('div', 'sc-meta', `${s.numberOfAyahs} verses · ${placeName(s.revelationType)}`));
-      if (st.learnedOn) card.append(el('span', 'chip chip-done', '✓ Learned'));
-      else if (st.listenSeconds > 0) card.append(el('span', 'chip', 'Practicing'));
-      card.addEventListener('click', () => openSurah(s.number));
+      const got = learned[s.number] || 0;
+      if (got >= s.numberOfAyahs) card.append(el('span', 'chip chip-done', '✓ Learned'));
+      else if (got > 0) card.append(el('span', 'chip', `${got} of ${s.numberOfAyahs} learned`));
+      card.addEventListener('click', () => showListen(s.number, true));
       container.appendChild(card);
     });
     if (!container.children.length) container.append(el('p', 'muted', 'No surah found. Try a different name.'));
@@ -730,373 +1286,85 @@ function initSurahSearch() {
   });
 }
 
-// ---------- Study Tab ----------
-const LEVEL_WORDS = [
-  '', 'Just starting', 'Just starting', 'Just starting',
-  'Getting there', 'Getting there', 'Getting there',
-  'Pretty good', 'Pretty good', 'Very strong', 'Almost perfect'
-];
+function renderNowPlaying() {
+  const btn = $('now-playing');
+  const audio = $('audio-player');
+  const on = listenSurah && audio.src && !audio.paused;
+  btn.hidden = !on;
+  if (on && surahListCache) btn.textContent = `▶ Now playing: ${listenSurah}. ${surahListCache[listenSurah - 1].englishName} (tap to open)`;
+}
 
-async function renderStudy() {
-  const token = ++renderToken;
-  const n = currentSurahNumber();
-  const empty = $('no-surah-selected');
-  const content = $('learn-content');
-
-  if (!n) {
-    empty.hidden = false;
-    content.hidden = true;
-    return;
-  }
-  empty.hidden = true;
-  content.hidden = false;
-
-  if (activeVerseRec) { activeVerseRec.cancel(); activeVerseRec = null; }
-  const state = getState(n);
-  let meta = null;
-  try { meta = (await getSurahList())[n - 1]; } catch (e) { /* offline: fall back to saved name */ }
-  if (token !== renderToken) return;
-  currentMeta = meta;
-
-  const name = meta ? meta.englishName : (state.englishName || `Surah ${n}`);
-  $('learn-surah-name').textContent = meta
-    ? `${n}. ${meta.englishName} — ${meta.englishNameTranslation}`
-    : `${n}. ${name}`;
-  $('learn-surah-arabic').textContent = meta ? meta.name : state.arabicName;
-  $('learn-surah-meta').textContent = meta ? `${meta.numberOfAyahs} verses · ${placeName(meta.revelationType)}` : '';
-
-  // About: plain-English summary, then the reflection questions.
-  let info = null;
-  try { info = await getSurahInfo(n); } catch (e) { /* shown as fallback text below */ }
-  if (token !== renderToken) return;
-  $('about-summary').textContent = info ? info.summary : 'The summary could not load. Check your internet and try again.';
-  renderReflections(n, info ? info.questions : [], state.reflections);
-
-  // Your own words, level, practice stats
-  $('my-summary').value = state.note;
-  $('my-summary-status').textContent = '';
-  currentSimpleText = '';
-  renderReview(n);
-  $('level-slider').value = state.level ?? 5;
-  renderLevelLabel(state.level);
-  renderPracticeStats(n);
-  renderLoopButton();
-
-  // Audio: only reload the source when the surah changed so playback is not interrupted.
-  if ($('audio-player').dataset.surah !== String(n)) await setSurahAudio(n);
-  if (token !== renderToken) return;
-  renderOfflineState(n);
+function updateListenLinks(name) {
   const reciter = localStorage.getItem(LS.reciter) || 'Mishary Alafasy';
   const query = encodeURIComponent(`${name} Surah ${reciter} full recitation`);
   $('link-youtube').href = `https://www.youtube.com/results?search_query=${query}`;
   $('link-spotify').href = `https://open.spotify.com/search/${query}`;
-  const details = $('yt-details');
-  details.open = false;
   $('youtube-embed').removeAttribute('src');
   $('youtube-embed').dataset.src = `https://www.youtube.com/embed?listType=search&list=${query}`;
+  $('yt-details').open = false;
+}
 
-  resetRecitationUI();
-  refreshLearnedUI();
-
-  // Verses
-  const list = $('verses-list');
-  const note = $('verses-note');
-  list.innerHTML = '<p class="muted">Loading verses…</p>';
-  note.hidden = true;
-  const [text, simple] = await Promise.all([getSurahText(n).catch(() => null), getSimpleAyahs(n)]);
-  if (token !== renderToken) return;
-
-  if (!text) {
-    list.innerHTML = '<p class="muted">Could not load verse text. Check your internet connection.</p>';
-    return;
+async function showListen(n, autoplay) {
+  n = Number(n);
+  if (!(n >= 1 && n <= 114)) return;
+  let meta = null;
+  try { meta = (await getSurahList())[n - 1]; } catch (e) { /* offline with nothing saved */ }
+  const audio = $('audio-player');
+  const same = listenSurah === n && audio.dataset.surah === String(n);
+  listenSurah = n;
+  localStorage.setItem(LS.listen, String(n));
+  $('surah-browse').hidden = true;
+  $('surah-listen').hidden = false;
+  $('listen-name').textContent = meta ? `${n}. ${meta.englishName}` : `Surah ${n}`;
+  $('listen-arabic').textContent = meta ? meta.name : '';
+  $('listen-meta').textContent = meta ? `${meta.englishNameTranslation} · ${meta.numberOfAyahs} verses · ${placeName(meta.revelationType)}` : '';
+  $('btn-prev').disabled = n <= 1;
+  $('btn-next').disabled = n >= 114;
+  updateListenLinks(meta ? meta.englishName : `Surah ${n}`);
+  renderLoopButton();
+  if (!same) {
+    autoplayNext = !!autoplay;
+    setSurahAudio(n);
+  } else if (autoplay && audio.paused) {
+    $('ayah-audio').pause();
+    audio.play().catch(() => {});
   }
-  const count = text.arabic.ayahs.length;
-  const hasSimple = Array.isArray(simple) && simple.length === count;
-  const lang = currentLanguage();
-  currentSimpleText = hasSimple ? simple.join(' ') : '';
-  $('verses-lang').textContent = `Translation: ${LANGUAGES[lang].label}`;
-  if (!hasSimple) {
-    note.hidden = false;
-    note.textContent = 'Simple words for each verse are not ready for this surah yet. Read the summary above.';
-  }
-  list.innerHTML = '';
-  const ayahLevels = getState(n).ayahLevels;
-  text.arabic.ayahs.forEach((ayah, i) => {
-    const item = el('div', 'verse-item');
-    item.append(el('span', 'verse-num', `Ayah ${ayah.numberInSurah}`));
-    item.append(el('div', 'verse-arabic', stripBismillah(ayah.text, n, ayah.numberInSurah)));
-    item.append(el('div', 'verse-translit', text.transliteration.ayahs[i].text));
-    item.append(el('div', 'verse-translation', text.translation.ayahs[i].text));
-    if (hasSimple) {
-      const simpleBox = el('div', 'verse-simple');
-      simpleBox.append(el('b', null, lang === 'en' ? 'In simple words: ' : 'In simple English: '), document.createTextNode(simple[i]));
-      item.append(simpleBox);
-    }
-    item.append(buildVersePractice(n, ayah.numberInSurah, ayahLevels[ayah.numberInSurah] ?? null));
-    list.appendChild(item);
-  });
+  renderListenVerses(n);
+  renderOfflineState(n);
 }
 
-// A small box under every verse to rate yourself and record just that verse.
-function buildVersePractice(n, ayahNumber, level) {
-  const box = el('details', 'verse-practice');
-  const summary = el('summary', null, level ? `Practice this verse · ${level}/10` : 'Practice this verse');
-  box.append(summary);
-
-  const row = el('div', 'level-row');
-  const slider = el('input');
-  slider.type = 'range'; slider.min = '1'; slider.max = '10'; slider.step = '1';
-  slider.value = String(level ?? 5);
-  row.append(el('span', 'tiny muted', '1'), slider, el('span', 'tiny muted', '10'));
-  const label = el('p', 'level-label', level ? `${level} / 10 — ${LEVEL_WORDS[level]}` : 'How well can you say this verse? Slide to show.');
-  slider.addEventListener('input', () => {
-    const v = parseInt(slider.value, 10);
-    label.textContent = `${v} / 10 — ${LEVEL_WORDS[v]}`;
-  });
-  slider.addEventListener('change', () => {
-    const v = parseInt(slider.value, 10);
-    const levels = Object.assign({}, getState(n).ayahLevels, { [ayahNumber]: v });
-    setState(n, { ayahLevels: levels });
-    summary.textContent = `Practice this verse · ${v}/10`;
-  });
-
-  const recBtn = el('button', 'btn secondary', '🎙️ Say this verse');
-  recBtn.type = 'button';
-  const player = el('audio', 'full-audio');
-  player.controls = true;
-  player.hidden = true;
-  let rec = null;
-  let url = null;
-  recBtn.addEventListener('click', async () => {
-    if (rec) {
-      const r = rec;
-      rec = null;
-      if (activeVerseRec === r) activeVerseRec = null;
-      recBtn.disabled = true;
-      try {
-        const { blob } = await r.stop();
-        if (url) URL.revokeObjectURL(url);
-        url = URL.createObjectURL(blob);
-        player.src = url;
-        player.hidden = false;
-        player.load();
-      } catch (e) {
-        alert(recordingErrorMessage(e));
-      }
-      recBtn.textContent = '🎙️ Say it again';
-      recBtn.disabled = false;
-      return;
-    }
-    if (activeVerseRec) { alert('Please stop the other recording first.'); return; }
-    try {
-      rec = await startRecording();
-      activeVerseRec = rec;
-      recBtn.textContent = '⏹ Stop';
-    } catch (e) {
-      rec = null;
-      alert(recordingErrorMessage(e));
-    }
-  });
-
-  box.append(row, label, recBtn, player);
-  return box;
-}
-
-// ---------- Check "your own words" against what the surah is about ----------
-// This is a simple word check, not a teacher: it looks for the main ideas of the
-// surah (taken from its summary, questions and verse notes) in what you wrote.
-let currentSimpleText = '';
-let topicDocFreq = null;
-const STOP_LIST = ('a an the and or but if then so of to in on at by for with from as is are was were be been being it its this that ' +
-  'these those he she they them his her their you your we our us i me my not no yes do does did done have has had will would can could ' +
-  'should may might must about into over under up down out off again more most some any all each every other such only own same than ' +
-  'too very just also there here when where why how what which who whom while because until one two three many much make made makes ' +
-  'say says said tell tells told allah surah ayah verse quran people person like get gets got go goes went come comes came').split(' ');
-const STOPS = new Set(STOP_LIST);
-
-function stemWord(w) {
-  if (w.length > 5) w = w.replace(/(ing|ed)$/, '');
-  if (w.length > 4) w = w.replace(/(es|s)$/, '');
-  return w;
-}
-function wordsOf(text) {
-  return (String(text).toLowerCase().match(/[a-z']+/g) || [])
-    .map(w => w.replace(/'s$/, '').replace(/'/g, ''))
-    .filter(w => w.length > 2 && !STOPS.has(w))
-    .map(w => ({ word: w, stem: stemWord(w) }));
-}
-function topicWords(n) {
-  const docs = surahInfoCache || [];
-  const doc = docs.find(d => d.n === n);
-  if (!doc) return [];
-  if (!topicDocFreq) {
-    topicDocFreq = new Map();
-    docs.forEach(d => {
-      new Set(wordsOf(d.summary + ' ' + d.questions.join(' ')).map(t => t.stem))
-        .forEach(st => topicDocFreq.set(st, (topicDocFreq.get(st) || 0) + 1));
+async function renderListenVerses(n) {
+  const box = $('listen-verses');
+  $('listen-verses-lang').textContent = `Words in: ${LANGUAGES[currentLanguage()].label}`;
+  try {
+    const t = await getSurahText(n);
+    if (listenSurah !== n) return;
+    const frag = document.createDocumentFragment();
+    t.arabic.ayahs.forEach((ay, i) => {
+      const item = el('div', 'verse-item');
+      item.append(el('span', 'verse-num', `Verse ${ay.numberInSurah}`));
+      item.append(el('div', 'verse-arabic', stripBismillah(ay.text, n, ay.numberInSurah)));
+      item.append(el('div', 'verse-translit', t.transliteration.ayahs[i].text));
+      item.append(el('div', 'verse-translation', t.translation.ayahs[i].text));
+      frag.append(item);
     });
+    box.innerHTML = '';
+    box.append(frag);
+  } catch (e) {
+    box.innerHTML = '';
+    box.append(el('p', 'muted', 'Could not load the words. Check your internet connection.'));
   }
-  const counts = new Map();
-  wordsOf(doc.summary + ' ' + doc.summary + ' ' + doc.questions.join(' ') + ' ' + currentSimpleText).forEach(t => {
-    const cur = counts.get(t.stem) || { word: t.word, c: 0 };
-    cur.c += 1;
-    counts.set(t.stem, cur);
-  });
-  return [...counts.entries()]
-    .filter(([st]) => st.length >= 4)
-    .map(([st, v]) => ({ stem: st, word: v.word, score: v.c * Math.log((docs.length + 1) / ((topicDocFreq.get(st) || 0) + 1)) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 12);
-}
-
-function reviewOwnWords(n, text) {
-  const mine = wordsOf(text);
-  if (mine.length < 5) return { level: 'short', matched: [], missing: [] };
-  const mineStems = new Set(mine.map(t => t.stem));
-  const topic = topicWords(n);
-  const matched = topic.filter(t => mineStems.has(t.stem));
-  const missing = topic.filter(t => !mineStems.has(t.stem));
-  const level = matched.length >= 3 ? 'good' : matched.length >= 1 ? 'partial' : 'off';
-  return { level, matched: matched.map(t => t.word), missing: missing.slice(0, 4).map(t => t.word) };
-}
-
-function renderReview(n) {
-  const box = $('review-box');
-  const rv = getState(n).noteReview;
-  box.innerHTML = '';
-  if (!rv) { box.hidden = true; return; }
-  box.hidden = false;
-  box.className = 'review-box review-' + rv.level;
-  const heads = {
-    good: '✓ Review done: your words match this surah.',
-    partial: 'Review done: partly right. Add a little more.',
-    off: 'Review done: I could not find the main ideas of this surah in your words.'
-  };
-  box.append(el('b', null, heads[rv.level] || 'Review done.'));
-  if (rv.matched && rv.matched.length) box.append(el('p', null, `You wrote about: ${rv.matched.join(', ')}.`));
-  if (rv.level !== 'good' && rv.missing && rv.missing.length) {
-    box.append(el('p', null, `Try to also say something about: ${rv.missing.join(', ')}.`));
-  }
-  if (rv.level === 'off') box.append(el('p', null, 'Read "What this surah is about" above and try again.'));
-  box.append(el('p', 'muted tiny', `Sent for review on ${rv.submittedOn}.`));
-  const changed = (rv.text || '').trim() !== $('my-summary').value.trim();
-  if (changed) box.append(el('p', 'tiny', 'You changed your words. Press "Send my words for review" again.'));
-}
-
-function submitOwnWords() {
-  const n = currentSurahNumber();
-  if (!n) return;
-  const text = $('my-summary').value.trim();
-  const status = $('my-summary-status');
-  setState(n, { note: text });
-  const result = reviewOwnWords(n, text);
-  if (result.level === 'short') {
-    status.textContent = 'Please write a little more (one or two sentences), then send again.';
-    return;
-  }
-  setState(n, { noteReview: { ...result, text, submittedOn: todayStr() } });
-  status.textContent = 'Review submitted ✓';
-  renderReview(n);
-}
-
-function renderReflections(n, questions, answers) {
-  const box = $('reflection-list');
-  box.innerHTML = '';
-  questions.forEach((q, i) => {
-    const wrap = el('div', 'reflection');
-    wrap.append(el('label', 'reflection-q', `${i + 1}. ${q}`));
-    const ta = el('textarea', 'note-box');
-    ta.rows = 3;
-    ta.placeholder = 'Your answer...';
-    ta.value = answers[i] || '';
-    const status = el('p', 'muted tiny');
-    bindAutosave(ta, status, (value) => {
-      const current = getState(n).reflections.slice();
-      while (current.length < questions.length) current.push('');
-      current[i] = value;
-      setState(n, { reflections: current });
-    });
-    wrap.append(ta, status);
-    box.append(wrap);
-  });
-}
-
-// Saves a text field a moment after typing stops, for the surah that was open when typing.
-function bindAutosave(field, statusEl, save) {
-  let timer = null;
-  field.addEventListener('input', () => {
-    statusEl.textContent = 'Typing…';
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      save(field.value);
-      statusEl.textContent = 'Saved ✓';
-    }, 500);
-  });
-}
-
-function renderLevelLabel(level) {
-  $('level-label').textContent = level ? `${level} / 10 — ${LEVEL_WORDS[level]}` : 'Not rated yet';
-}
-
-function renderPracticeStats(n) {
-  const s = getState(n);
-  $('practice-stats').textContent = s.listenSeconds || s.repeats
-    ? `Practice time: ${fmtDuration(s.listenSeconds)} · Repeated ${s.repeats} ${s.repeats === 1 ? 'time' : 'times'}`
-    : 'Press play. Your practice time and repeats will show here.';
 }
 
 function renderLoopButton() {
   const on = localStorage.getItem(LS.loop) === '1';
-  const btn = $('btn-loop');
-  btn.textContent = `🔁 Repeat: ${on ? 'On' : 'Off'}`;
-  btn.setAttribute('aria-pressed', String(on));
-  btn.classList.toggle('active', on);
+  const b = $('btn-loop');
+  b.textContent = on ? '🔁 Repeat: On' : '🔁 Repeat: Off';
+  b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  b.classList.toggle('active', on);
   $('repeat-hint').textContent = on
-    ? 'Repeat is on: this surah plays again and again.'
-    : 'Repeat is off: the next surah plays after this one.';
-}
-
-function initStudyActions() {
-  bindAutosave($('my-summary'), $('my-summary-status'), (value) => {
-    const n = currentSurahNumber();
-    if (n) setState(n, { note: value });
-  });
-
-  $('btn-submit-words').addEventListener('click', submitOwnWords);
-  $('my-summary').addEventListener('input', () => { const n = currentSurahNumber(); if (n) renderReview(n); });
-
-  const slider = $('level-slider');
-  slider.addEventListener('input', () => renderLevelLabel(parseInt(slider.value, 10)));
-  slider.addEventListener('change', () => {
-    const n = currentSurahNumber();
-    if (n) setState(n, { level: parseInt(slider.value, 10) });
-  });
-
-  $('btn-rewind').addEventListener('click', () => {
-    const audio = $('audio-player');
-    audio.currentTime = Math.max(0, audio.currentTime - 5);
-  });
-
-  $('btn-loop').addEventListener('click', () => {
-    const on = localStorage.getItem(LS.loop) === '1';
-    localStorage.setItem(LS.loop, on ? '0' : '1');
-    renderLoopButton();
-  });
-
-  // Only load the video once someone actually opens it.
-  $('yt-details').addEventListener('toggle', (e) => {
-    const frame = $('youtube-embed');
-    if (e.target.open && !frame.getAttribute('src') && frame.dataset.src) frame.src = frame.dataset.src;
-  });
-
-  $('btn-save-short').addEventListener('click', saveShortSurahsOffline);
-  $('btn-clear-audio').addEventListener('click', clearSavedAudio);
-  $('btn-offline').addEventListener('click', () => { const n = currentSurahNumber(); if (n) saveSurahOffline(n); });
-  $('btn-offline-remove').addEventListener('click', () => { const n = currentSurahNumber(); if (n) removeOffline(n); });
-
-  initPlayerUI();
-  initPracticeTracking();
-  initRecitationActions();
+    ? 'This surah plays again and again.'
+    : 'When this surah ends, the next surah plays.';
 }
 
 // ---------- Big player ----------
@@ -1127,9 +1395,19 @@ function initPlayerUI() {
     if (audio.paused) audio.play().catch(() => {});
     else audio.pause();
   });
-  audio.addEventListener('play', () => setPlayIcon(true));
-  audio.addEventListener('pause', () => setPlayIcon(false));
-  audio.addEventListener('ended', () => setPlayIcon(false));
+  audio.addEventListener('play', () => { setPlayIcon(true); $('ayah-audio').pause(); renderNowPlaying(); });
+  audio.addEventListener('pause', () => { setPlayIcon(false); renderNowPlaying(); });
+  audio.addEventListener('ended', () => {
+    setPlayIcon(false);
+    if (localStorage.getItem(LS.loop) === '1') {
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+    } else if (listenSurah && listenSurah < 114) {
+      showListen(listenSurah + 1, true);   // Repeat is off: go on to the next surah
+    } else {
+      renderNowPlaying();
+    }
+  });
 
   audio.addEventListener('timeupdate', () => {
     if (!dragging && isFinite(audio.duration) && audio.duration > 0) {
@@ -1144,6 +1422,7 @@ function initPlayerUI() {
   // If the main audio server cannot be reached, try the backup one once.
   audio.addEventListener('error', () => {
     const n = parseInt(audio.dataset.surah || '', 10);
+    if (!audio.src) return;
     if (!navigator.onLine && !audio.src.startsWith('blob:')) {
       $('offline-status').textContent = 'No internet right now. Press "Save for no internet" while you are online, and this surah will play anywhere.';
       return;
@@ -1162,388 +1441,26 @@ function initPlayerUI() {
     if (isFinite(audio.duration)) audio.currentTime = (slider.value / 1000) * audio.duration;
     dragging = false;
   });
-}
 
-// Counts how long the reference recitation has been playing and how many times it finished.
-function initPracticeTracking() {
-  const audio = $('audio-player');
-  let timer = null;
-  let last = 0;
-
-  const stop = () => { clearInterval(timer); timer = null; };
-
-  audio.addEventListener('playing', () => {
-    stop();
-    last = Date.now();
-    timer = setInterval(() => {
-      const now = Date.now();
-      const delta = Math.min((now - last) / 1000, 2);
-      last = now;
-      const n = parseInt(audio.dataset.surah || '', 10);
-      if (!n || audio.paused || audio.seeking) return;
-      setState(n, { listenSeconds: getState(n).listenSeconds + delta });
-      if (n === currentSurahNumber()) renderPracticeStats(n);
-    }, 1000);
+  $('btn-rewind').addEventListener('click', () => { audio.currentTime = Math.max(0, audio.currentTime - 5); });
+  $('btn-prev').addEventListener('click', () => { if (listenSurah > 1) showListen(listenSurah - 1, true); });
+  $('btn-next').addEventListener('click', () => { if (listenSurah < 114) showListen(listenSurah + 1, true); });
+  $('btn-loop').addEventListener('click', () => {
+    const on = localStorage.getItem(LS.loop) === '1';
+    localStorage.setItem(LS.loop, on ? '0' : '1');
+    renderLoopButton();
   });
-  audio.addEventListener('pause', stop);
-  audio.addEventListener('ended', () => {
-    stop();
-    const n = parseInt(audio.dataset.surah || '', 10);
-    if (n) {
-      setState(n, { repeats: getState(n).repeats + 1 });
-      if (n === currentSurahNumber()) renderPracticeStats(n);
-    }
-    if (localStorage.getItem(LS.loop) === '1') {
-      audio.currentTime = 0;
-      audio.play().catch(() => {});
-    } else if (n && n < 114 && n === currentSurahNumber()) {
-      playSurah(n + 1);   // Repeat is off: go on to the next surah
-    }
-  });
-}
+  $('btn-listen-back').addEventListener('click', () => { showBrowse(); renderSurahGrid(); });
+  $('now-playing').addEventListener('click', () => { if (listenSurah) showListen(listenSurah, false); });
 
-// ---------- Recording ----------
-// Works on iPhone Safari (which records MP4) and on Chrome (WebM). If a phone has
-// no MediaRecorder at all, it records plain audio (WAV) instead.
-function RecError(code) { this.code = code; }
-
-function recordingErrorMessage(err) {
-  switch (err && err.code) {
-    case 'denied': return 'The microphone is blocked. Open your phone Settings, find Safari or this app, and allow the Microphone. Then try again.';
-    case 'nomic': return 'No microphone was found on this phone.';
-    case 'unsupported': return 'This phone or browser cannot record here. Please open the app in Safari or Chrome.';
-    case 'empty': return 'Nothing was recorded. Please try again and speak for a few seconds.';
-    default: return 'Recording did not work. Please close the app, open it again, and try once more.';
-  }
-}
-
-function pickRecorderType() {
-  if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
-  const types = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
-  return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
-}
-
-async function startRecording() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new RecError('unsupported');
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (e) {
-    const name = e && e.name;
-    throw new RecError(name === 'NotAllowedError' || name === 'SecurityError' ? 'denied'
-      : name === 'NotFoundError' || name === 'OverconstrainedError' ? 'nomic' : 'failed');
-  }
-  const startedAt = Date.now();
-  const stopTracks = () => stream.getTracks().forEach(t => t.stop());
-
-  if (typeof MediaRecorder !== 'undefined') {
-    try {
-      const mime = pickRecorderType();
-      const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-      const chunks = [];
-      rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
-      rec.start();
-      return {
-        cancel() { try { rec.onstop = null; rec.stop(); } catch (e) { /* already stopped */ } stopTracks(); },
-        stop() {
-          return new Promise((resolve, reject) => {
-            rec.onstop = () => {
-              stopTracks();
-              // Label the file with what the phone really recorded, or Safari cannot play it.
-              const blob = new Blob(chunks, { type: rec.mimeType || mime || 'audio/mp4' });
-              if (blob.size > 0) resolve({ blob, seconds: (Date.now() - startedAt) / 1000 });
-              else reject(new RecError('empty'));
-            };
-            try { rec.stop(); } catch (e) { stopTracks(); reject(new RecError('failed')); }
-          });
-        }
-      };
-    } catch (e) {
-      /* this phone cannot use MediaRecorder: use the plain audio way below */
-    }
-  }
-  return startWavRecording(stream, startedAt, stopTracks);
-}
-
-function startWavRecording(stream, startedAt, stopTracks) {
-  const AC = window.AudioContext || window.webkitAudioContext;
-  if (!AC) { stopTracks(); throw new RecError('unsupported'); }
-  const ctx = new AC();
-  if (ctx.state === 'suspended') ctx.resume();
-  const source = ctx.createMediaStreamSource(stream);
-  const proc = ctx.createScriptProcessor(4096, 1, 1);
-  const mute = ctx.createGain();
-  mute.gain.value = 0;
-  const factor = Math.max(1, Math.floor(ctx.sampleRate / 16000));
-  const rate = Math.round(ctx.sampleRate / factor);
-  const chunks = [];
-  proc.onaudioprocess = (e) => {
-    const input = e.inputBuffer.getChannelData(0);
-    const out = new Int16Array(Math.floor(input.length / factor));
-    for (let i = 0; i < out.length; i++) {
-      const v = Math.max(-1, Math.min(1, input[i * factor]));
-      out[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
-    }
-    chunks.push(out);
-  };
-  source.connect(proc);
-  proc.connect(mute);
-  mute.connect(ctx.destination);
-  const close = () => {
-    try { proc.disconnect(); source.disconnect(); mute.disconnect(); } catch (e) { /* ignore */ }
-    stopTracks();
-    try { ctx.close(); } catch (e) { /* ignore */ }
-  };
-  return {
-    cancel() { close(); },
-    stop() {
-      close();
-      const blob = encodeWav(chunks, rate);
-      return blob.size > 44
-        ? Promise.resolve({ blob, seconds: (Date.now() - startedAt) / 1000 })
-        : Promise.reject(new RecError('empty'));
-    }
-  };
-}
-
-function encodeWav(chunks, rate) {
-  let length = 0;
-  chunks.forEach(c => { length += c.length; });
-  const buffer = new ArrayBuffer(44 + length * 2);
-  const view = new DataView(buffer);
-  const text = (o, str) => { for (let i = 0; i < str.length; i++) view.setUint8(o + i, str.charCodeAt(i)); };
-  text(0, 'RIFF'); view.setUint32(4, 36 + length * 2, true); text(8, 'WAVE'); text(12, 'fmt ');
-  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-  text(36, 'data'); view.setUint32(40, length * 2, true);
-  let offset = 44;
-  chunks.forEach(c => { for (let i = 0; i < c.length; i++, offset += 2) view.setInt16(offset, c[i], true); });
-  return new Blob([buffer], { type: 'audio/wav' });
-}
-
-// ---------- Recite it yourself ----------
-// No browser on iOS supports speech-to-text, so accuracy cannot be graded
-// automatically. Instead the recording must be listened to in full (tracked
-// in real time, skipping ahead does not count) before it can be confirmed.
-let activeRecitationRec = null;
-let recitationTimer = null;
-let recitationUrl = null;
-let recordingDuration = 0;
-let listenedSeconds = 0;
-let listenTickInterval = null;
-let lastTickTime = null;
-
-function resetRecitationUI() {
-  const audioEl = $('recitation-audio');
-  audioEl.pause();
-  audioEl.hidden = true;
-  audioEl.removeAttribute('src');
-  if (activeRecitationRec) { activeRecitationRec.cancel(); activeRecitationRec = null; }
-  clearInterval(recitationTimer);
-  $('btn-record-recitation').textContent = '🎙️ Start Recording';
-  $('btn-record-recitation').disabled = false;
-  const note = $('recitation-listen-note');
-  note.hidden = true;
-  note.textContent = '';
-  const checkbox = $('recitation-confirm-checkbox');
-  checkbox.checked = false;
-  checkbox.disabled = true;
-  $('btn-mark-learned').disabled = true;
-  recordingDuration = 0;
-  listenedSeconds = 0;
-  clearInterval(listenTickInterval);
-}
-
-// Attached once; recordingDuration/listenedSeconds are reset for every new recording.
-function attachListenTracking(audio) {
-  const updateNote = () => {
-    const note = $('recitation-listen-note');
-    if (!recordingDuration) return;
-    note.hidden = false;
-    const pct = Math.min(100, Math.round((listenedSeconds / recordingDuration) * 100));
-    note.textContent = `You listened ${Math.round(listenedSeconds)} sec of ${Math.round(recordingDuration)} sec (${pct}%). Listen to all of it to go on.`;
-  };
-
-  const checkUnlock = () => {
-    if (recordingDuration > 0 && listenedSeconds >= recordingDuration * 0.9) {
-      $('recitation-confirm-checkbox').disabled = false;
-      $('recitation-listen-note').textContent = '✓ You listened to all of it. You can check the box below.';
-    }
-  };
-
-  // The length is measured while recording, so a phone that cannot report the
-  // length of a file still works. The file's own length is used only if it is real.
-  audio.addEventListener('loadedmetadata', () => {
-    if (isFinite(audio.duration) && audio.duration > 0.5) recordingDuration = audio.duration;
-    updateNote();
+  // Only load the video once someone actually opens it.
+  $('yt-details').addEventListener('toggle', (e) => {
+    const frame = $('youtube-embed');
+    if (e.target.open && !frame.getAttribute('src') && frame.dataset.src) frame.src = frame.dataset.src;
   });
 
-  audio.addEventListener('play', () => {
-    lastTickTime = Date.now();
-    clearInterval(listenTickInterval);
-    listenTickInterval = setInterval(() => {
-      const now = Date.now();
-      const delta = (now - lastTickTime) / 1000;
-      lastTickTime = now;
-      if (!audio.paused && !audio.seeking) listenedSeconds += delta;
-      updateNote();
-      checkUnlock();
-    }, 250);
-  });
-  audio.addEventListener('pause', () => clearInterval(listenTickInterval));
-  audio.addEventListener('ended', () => { clearInterval(listenTickInterval); checkUnlock(); });
-}
-
-function refreshLearnedUI() {
-  const n = currentSurahNumber();
-  if (!n) return;
-  const s = getState(n);
-  const learned = !!s.learnedOn;
-  $('learned-badge').hidden = !learned;
-  $('btn-mark-learned').hidden = learned;
-  $('btn-unlearn').hidden = !learned;
-  $('learned-status').textContent = learned
-    ? `🎉 You learned this surah on ${s.learnedOn}. It is in Your Wins.`
-    : '';
-}
-
-function initRecitationActions() {
-  const recordBtn = $('btn-record-recitation');
-  const audioEl = $('recitation-audio');
-  const checkbox = $('recitation-confirm-checkbox');
-  attachListenTracking(audioEl);
-
-  recordBtn.addEventListener('click', async () => {
-    const note = $('recitation-listen-note');
-    if (activeRecitationRec) {
-      const rec = activeRecitationRec;
-      activeRecitationRec = null;
-      clearInterval(recitationTimer);
-      recordBtn.disabled = true;
-      try {
-        const { blob, seconds } = await rec.stop();
-        recordingDuration = seconds;
-        listenedSeconds = 0;
-        if (recitationUrl) URL.revokeObjectURL(recitationUrl);
-        recitationUrl = URL.createObjectURL(blob);
-        audioEl.src = recitationUrl;
-        audioEl.hidden = false;
-        audioEl.load();
-        checkbox.disabled = true;
-        checkbox.checked = false;
-        $('btn-mark-learned').disabled = true;
-        note.hidden = false;
-        note.textContent = `Recording saved (${fmtClock(seconds)}). Now press play and listen to all of it.`;
-      } catch (e) {
-        note.hidden = true;
-        alert(recordingErrorMessage(e));
-      }
-      recordBtn.textContent = '🎙️ Record Again';
-      recordBtn.disabled = false;
-      return;
-    }
-    try {
-      recordBtn.disabled = true;
-      audioEl.pause();
-      activeRecitationRec = await startRecording();
-      recordBtn.disabled = false;
-      recordBtn.textContent = '⏹ Stop Recording';
-      const started = Date.now();
-      const tick = () => { note.hidden = false; note.textContent = `🔴 Recording… ${fmtClock((Date.now() - started) / 1000)}`; };
-      tick();
-      recitationTimer = setInterval(tick, 500);
-    } catch (e) {
-      activeRecitationRec = null;
-      recordBtn.disabled = false;
-      recordBtn.textContent = '🎙️ Start Recording';
-      alert(recordingErrorMessage(e));
-    }
-  });
-
-  checkbox.addEventListener('change', () => {
-    $('btn-mark-learned').disabled = !checkbox.checked;
-  });
-
-  $('btn-mark-learned').addEventListener('click', () => {
-    const n = currentSurahNumber();
-    if (!n || !checkbox.checked) return;
-    setState(n, {
-      learnedOn: todayStr(),
-      englishName: currentMeta ? currentMeta.englishName : '',
-      arabicName: currentMeta ? currentMeta.name : ''
-    });
-    refreshLearnedUI();
-  });
-
-  $('btn-unlearn').addEventListener('click', () => {
-    const n = currentSurahNumber();
-    if (!n) return;
-    setState(n, { learnedOn: null });
-    refreshLearnedUI();
-    checkbox.checked = false;
-    $('btn-mark-learned').disabled = true;
-  });
-}
-
-// ---------- Your Wins Tab ----------
-async function renderWins() {
-  const states = allStates();
-  const entries = Object.keys(states).map(k => ({ n: parseInt(k, 10), ...getState(parseInt(k, 10)) }));
-  const learned = entries.filter(e => e.learnedOn).sort((a, b) => b.learnedOn.localeCompare(a.learnedOn));
-  const practicing = entries.filter(e => !e.learnedOn && e.listenSeconds > 0)
-    .sort((a, b) => b.listenSeconds - a.listenSeconds);
-
-  $('wins-learned').textContent = learned.length;
-  $('wins-time').textContent = fmtDuration(entries.reduce((s, e) => s + e.listenSeconds, 0));
-  $('wins-repeats').textContent = entries.reduce((s, e) => s + e.repeats, 0);
-
-  // This month vs. goal
-  const goal = parseInt(localStorage.getItem(LS.monthlyGoal) || '1', 10);
-  $('monthly-goal-select').value = String(goal);
-  const now = new Date();
-  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const thisMonth = learned.filter(e => e.learnedOn.startsWith(monthKey)).length;
-  $('month-progress-fill').style.width = `${Math.min(100, (thisMonth / goal) * 100)}%`;
-  $('month-progress-text').textContent = thisMonth >= goal
-    ? `🎉 Goal done: ${thisMonth} learned this month`
-    : `${thisMonth} of ${goal} learned this month`;
-
-  let names = null;
-  try { names = await getSurahList(); } catch (e) { /* use saved names */ }
-  const label = (e) => {
-    const m = names ? names[e.n - 1] : null;
-    return `${e.n}. ${m ? m.englishName : (e.englishName || 'Surah ' + e.n)}`;
-  };
-
-  const fill = (container, rows, emptyText, detail) => {
-    container.innerHTML = '';
-    if (!rows.length) { container.append(el('p', 'muted', emptyText)); return; }
-    rows.forEach(e => {
-      const row = el('button', 'win-row');
-      row.append(el('span', 'win-name', label(e)), el('span', 'muted win-detail', detail(e)));
-      row.addEventListener('click', () => openSurah(e.n));
-      container.append(row);
-    });
-  };
-
-  fill($('wins-list'), learned, 'No surahs learned yet. Your first win is waiting.', (e) => {
-    const parts = [`Learned ${e.learnedOn}`];
-    if (e.level) parts.push(`Level ${e.level}/10`);
-    if (e.listenSeconds) parts.push(fmtDuration(e.listenSeconds));
-    return parts.join(' · ');
-  });
-  fill($('practicing-list'), practicing, 'Nothing yet. Play a surah and it will show up here.', (e) => {
-    const parts = [fmtDuration(e.listenSeconds)];
-    if (e.level) parts.push(`Level ${e.level}/10`);
-    return parts.join(' · ');
-  });
-}
-
-function initWinsActions() {
-  $('monthly-goal-select').addEventListener('change', (e) => {
-    localStorage.setItem(LS.monthlyGoal, e.target.value);
-    renderWins();
-  });
+  $('btn-offline').addEventListener('click', () => { if (listenSurah) saveSurahOffline(listenSurah); });
+  $('btn-offline-remove').addEventListener('click', () => { if (listenSurah) removeOffline(listenSurah); });
 }
 
 // ---------- Settings Tab ----------
@@ -1552,66 +1469,23 @@ function initSettingsActions() {
   reciterSelect.value = localStorage.getItem(LS.reciter) || 'Mishary Alafasy';
   reciterSelect.addEventListener('change', () => {
     localStorage.setItem(LS.reciter, reciterSelect.value);
-    renderStudy();
+    if (listenSurah && surahListCache) updateListenLinks(surahListCache[listenSurah - 1].englishName);
   });
 
-  const languageSelect = $('language-select');
-  languageSelect.addEventListener('change', () => {
-    localStorage.setItem(LS.language, languageSelect.value);
-    renderStudy();
-    renderAyahOfTheDay();
-  });
+  $('language-select').addEventListener('change', (e) => setLanguage(e.target.value));
+  $('listen-language-select').addEventListener('change', (e) => setLanguage(e.target.value));
+
+  $('btn-save-short').addEventListener('click', saveShortSurahsOffline);
+  $('btn-clear-audio').addEventListener('click', clearSavedAudio);
 
   $('btn-reset-all').addEventListener('click', () => {
-    if (!confirm('Delete all of your notes, wins and practice time? You cannot undo this.')) return;
-    Object.values(LS).forEach(k => localStorage.removeItem(k));
-    stopAllAudio();
+    if (!confirm('Start over? This deletes everything you learned and your play counts. You cannot undo this.')) return;
+    localStorage.removeItem(LS.study);
+    ['current', 'surahs', 'monthly_goal'].forEach(f => localStorage.removeItem(profileKey(f)));
+    $('ayah-audio').pause();
     renderStudy();
     renderWins();
     renderSurahGrid();
-  });
-
-  initMicTest();
-}
-
-// Standalone mic check, independent of any surah.
-function initMicTest() {
-  const btn = $('btn-test-mic');
-  const audioEl = $('test-mic-audio');
-  const msg = $('mic-test-status');
-  let rec = null;
-  let url = null;
-
-  btn.addEventListener('click', async () => {
-    if (rec) {
-      const r = rec;
-      rec = null;
-      btn.disabled = true;
-      try {
-        const { blob, seconds } = await r.stop();
-        if (url) URL.revokeObjectURL(url);
-        url = URL.createObjectURL(blob);
-        audioEl.src = url;
-        audioEl.hidden = false;
-        audioEl.load();
-        msg.textContent = `✓ It works. You recorded ${fmtClock(seconds)}. Press play to hear it.`;
-      } catch (e) {
-        msg.textContent = '';
-        alert(recordingErrorMessage(e));
-      }
-      btn.textContent = '🎙️ Record Again';
-      btn.disabled = false;
-      return;
-    }
-    try {
-      rec = await startRecording();
-      btn.textContent = '⏹ Stop Recording';
-      msg.textContent = '🔴 Recording… say something, then press Stop.';
-    } catch (e) {
-      rec = null;
-      msg.textContent = '';
-      alert(recordingErrorMessage(e));
-    }
   });
 }
 
@@ -1633,8 +1507,8 @@ window.addEventListener('DOMContentLoaded', () => {
   initPeople();
   initTabs();
   initSurahSearch();
-  initStudyActions();
-  initWinsActions();
+  initPlayerUI();
+  initAyahAudio();
   initSettingsActions();
 
   adoptLegacyData();
