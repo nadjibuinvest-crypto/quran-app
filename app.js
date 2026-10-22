@@ -2,7 +2,7 @@
 // Every person on this phone gets their own set of keys, so progress never mixes.
 const PROFILES_KEY = 'qa_profiles';       // [{ id, name, pinHash }]
 const ACTIVE_KEY = 'qa_active_profile';   // id of the person using the app now
-const PROFILE_FIELDS = ['current', 'surahs', 'reciter', 'monthly_goal', 'loop', 'language', 'study', 'listen'];
+const PROFILE_FIELDS = ['current', 'surahs', 'reciter', 'monthly_goal', 'loop', 'language', 'study', 'listen', 'plan', 'speed'];
 let activeProfileId = null;
 function profileKey(field) { return `qa_p${activeProfileId}_${field}`; }
 const LS = {
@@ -10,7 +10,9 @@ const LS = {
   get reciter() { return profileKey('reciter'); },
   get loop() { return profileKey('loop'); },
   get language() { return profileKey('language'); }, // en, sw or fr
-  get listen() { return profileKey('listen'); }      // last surah played in All Surahs
+  get listen() { return profileKey('listen'); },     // last surah played in All Surahs
+  get plan() { return profileKey('plan'); },         // where Study starts and in what order
+  get speed() { return profileKey('speed'); }        // listening speed in All Surahs
 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DAILY_LIMIT = 2;       // new ayahs each day
@@ -147,6 +149,7 @@ function startApp(id) {
   stopAllAudio();
   $('reciter-select').value = localStorage.getItem(LS.reciter) || 'Mishary Alafasy';
   syncLanguageSelects();
+  renderSpeedButtons();
   renderAyahOfTheDay();
   surahSearchQuery = '';
   $('surah-search').value = '';
@@ -766,9 +769,35 @@ async function simpleNotes(n) {
   return notesCache.get(n);
 }
 
-// The next ayahs that are not finished yet, in order (shortest surahs first).
+// Where Study starts and in what order. Each person picks their own.
+//   order: 'short' = shortest surahs first, 'quran' = 1 to 114, 'back' = 114 to 1
+//   start: a surah number to begin with (then the order goes on from there), or null
+const STUDY_ORDERS = {
+  short: 'Shortest surahs first',
+  quran: 'In Quran order (1 to 114)',
+  back: 'From the end (114 to 1)'
+};
+function studyPlan() {
+  const p = loadJSON(LS.plan, null) || {};
+  return {
+    start: p.start >= 1 && p.start <= 114 ? p.start : null,
+    order: STUDY_ORDERS[p.order] ? p.order : 'short'
+  };
+}
+async function getSequence() {
+  const plan = studyPlan();
+  let seq;
+  if (plan.order === 'quran') seq = Array.from({ length: 114 }, (_, i) => i + 1);
+  else if (plan.order === 'back') seq = Array.from({ length: 114 }, (_, i) => 114 - i);
+  else seq = (await getStudyOrder()).slice();
+  const i = plan.start ? seq.indexOf(plan.start) : -1;
+  return i > 0 ? seq.slice(i).concat(seq.slice(0, i)) : seq;
+}
+
+// The next ayahs that are not finished yet, in order. Finished ayahs are skipped,
+// so an ayah left half-done stays waiting for you in the list.
 async function nextAyahs(count) {
-  const [order, list] = await Promise.all([getStudyOrder(), getSurahList()]);
+  const [order, list] = await Promise.all([getSequence(), getSurahList()]);
   const learned = studyData().ayahs;
   const out = [];
   for (const s of order) {
@@ -1056,6 +1085,7 @@ async function renderStudy() {
     return;
   }
   if (token !== studyToken) return;
+  fillStartPicker(list);
 
   const nodes = [];
   const todayCards = Object.entries(studyData().ayahs)
@@ -1110,6 +1140,30 @@ async function renderStudy() {
   nodes.forEach(n => body.append(n));
   syncPlayButtons();
   prefetchAhead(10);
+}
+
+// ---------- Choose where to start ----------
+function fillStartPicker(list) {
+  const sel = $('start-surah-select');
+  const plan = studyPlan();
+  if (!sel.options.length) {
+    sel.append(new Option('The first lesson in my order', ''));
+    list.forEach(s => sel.append(new Option(`${s.number}. ${s.englishName} (${s.numberOfAyahs} ayahs)`, String(s.number))));
+    const ord = $('study-order-select');
+    Object.entries(STUDY_ORDERS).forEach(([v, label]) => ord.append(new Option(label, v)));
+  }
+  sel.value = plan.start ? String(plan.start) : '';
+  $('study-order-select').value = plan.order;
+}
+
+function initStudyPlan() {
+  const save = () => {
+    const start = parseInt($('start-surah-select').value, 10) || null;
+    saveJSON(LS.plan, { start, order: $('study-order-select').value });
+    renderStudy();
+  };
+  $('start-surah-select').addEventListener('change', save);
+  $('study-order-select').addEventListener('change', save);
 }
 
 // ---------- Playing one ayah ----------
@@ -1356,6 +1410,36 @@ async function renderListenVerses(n) {
   }
 }
 
+// ---------- Listening speed ----------
+const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+function currentSpeed() {
+  const v = parseFloat(localStorage.getItem(LS.speed));
+  return SPEEDS.includes(v) ? v : 1;
+}
+function applySpeed() {
+  const audio = $('audio-player');
+  const r = currentSpeed();
+  audio.defaultPlaybackRate = r;
+  audio.playbackRate = r;
+}
+function renderSpeedButtons() {
+  const box = $('speed-buttons');
+  const cur = currentSpeed();
+  box.innerHTML = '';
+  SPEEDS.forEach(r => {
+    const b = el('button', 'speed-btn' + (r === cur ? ' active' : ''), r === 1 ? 'Normal' : `${r}×`);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', r === cur ? 'true' : 'false');
+    b.addEventListener('click', () => {
+      localStorage.setItem(LS.speed, String(r));
+      applySpeed();
+      renderSpeedButtons();
+    });
+    box.append(b);
+  });
+  applySpeed();
+}
+
 function renderLoopButton() {
   const on = localStorage.getItem(LS.loop) === '1';
   const b = $('btn-loop');
@@ -1395,7 +1479,7 @@ function initPlayerUI() {
     if (audio.paused) audio.play().catch(() => {});
     else audio.pause();
   });
-  audio.addEventListener('play', () => { setPlayIcon(true); $('ayah-audio').pause(); renderNowPlaying(); });
+  audio.addEventListener('play', () => { applySpeed(); setPlayIcon(true); $('ayah-audio').pause(); renderNowPlaying(); });
   audio.addEventListener('pause', () => { setPlayIcon(false); renderNowPlaying(); });
   audio.addEventListener('ended', () => {
     setPlayIcon(false);
@@ -1416,7 +1500,7 @@ function initPlayerUI() {
     $('time-now').textContent = fmtClock(audio.currentTime);
   });
   const showTotal = () => { $('time-total').textContent = isFinite(audio.duration) ? fmtClock(audio.duration) : '--:--'; };
-  audio.addEventListener('loadedmetadata', showTotal);
+  audio.addEventListener('loadedmetadata', () => { applySpeed(); showTotal(); });
   audio.addEventListener('durationchange', showTotal);
 
   // If the main audio server cannot be reached, try the backup one once.
@@ -1509,6 +1593,7 @@ window.addEventListener('DOMContentLoaded', () => {
   initSurahSearch();
   initPlayerUI();
   initAyahAudio();
+  initStudyPlan();
   initSettingsActions();
 
   adoptLegacyData();

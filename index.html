@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LP Quran</title>
-<link rel="stylesheet" href="styles.css?v=10">
+<link rel="stylesheet" href="styles.css?v=11">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1a2530">
 <link rel="icon" href="icons/icon-32.png" sizes="32x32">
@@ -61,6 +61,19 @@
 
     <!-- STUDY TAB -->
     <section id="tab-learn" class="tab-panel active">
+
+      <div class="card start-card">
+        <h3>Where do you want to start?</h3>
+        <div class="settings-row" style="padding-top:0;">
+          <label for="start-surah-select">Start with this surah</label>
+          <select id="start-surah-select" class="study-select"></select>
+        </div>
+        <div class="settings-row" style="border-bottom:none; padding-bottom:0;">
+          <label for="study-order-select">Then go in this order</label>
+          <select id="study-order-select" class="study-select"></select>
+        </div>
+        <p class="muted tiny" style="margin-bottom:0;">You can change this any time. What you already learned stays learned.</p>
+      </div>
 
       <div class="card today-card">
         <h2>Today's ayahs</h2>
@@ -156,6 +169,11 @@
             <button id="btn-loop" class="btn secondary" type="button" aria-pressed="false">🔁 Repeat: Off</button>
           </div>
           <p id="repeat-hint" class="muted tiny"></p>
+          <div class="speed-row">
+            <strong>Speed</strong>
+            <div id="speed-buttons" class="speed-buttons"></div>
+          </div>
+          <p class="muted tiny">Slow (0.5× or 0.75×) helps you hear every word. Faster (1.25× or more) is good for listening again.</p>
           <div class="offline-row">
             <button id="btn-offline" class="btn secondary" type="button">📥 Save for no internet</button>
             <button id="btn-offline-remove" class="btn ghost" type="button" hidden>Remove from this phone</button>
@@ -244,6 +262,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="app.js?v=17"></script>
+<script src="app.js?v=18"></script>
 </body>
 </html>
