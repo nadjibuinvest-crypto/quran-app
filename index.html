@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LP Quran</title>
-<link rel="stylesheet" href="styles.css?v=11">
+<link rel="stylesheet" href="styles.css?v=12">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1a2530">
 <link rel="icon" href="icons/icon-32.png" sizes="32x32">
@@ -50,6 +50,7 @@
   <header class="topbar">
     <div class="brand">🕌 <span>LP Quran</span><button id="btn-switch-person" class="person-chip" type="button">👤 <span id="person-name"></span></button></div>
     <nav class="tabs">
+      <button class="tab-btn" data-tab="verse">Verse of the Day</button>
       <button class="tab-btn active" data-tab="learn">Study</button>
       <button class="tab-btn" data-tab="wins">Your Wins</button>
       <button class="tab-btn" data-tab="surahs">All Surahs</button>
@@ -59,33 +60,8 @@
 
   <main>
 
-    <!-- STUDY TAB -->
-    <section id="tab-learn" class="tab-panel active">
-
-      <div class="card start-card">
-        <h3>Where do you want to start?</h3>
-        <div class="settings-row" style="padding-top:0;">
-          <label for="start-surah-select">Start with this surah</label>
-          <select id="start-surah-select" class="study-select"></select>
-        </div>
-        <div class="settings-row" style="border-bottom:none; padding-bottom:0;">
-          <label for="study-order-select">Then go in this order</label>
-          <select id="study-order-select" class="study-select"></select>
-        </div>
-        <p class="muted tiny" style="margin-bottom:0;">You can change this any time. What you already learned stays learned.</p>
-      </div>
-
-      <div class="card today-card">
-        <h2>Today's ayahs</h2>
-        <div class="today-row">
-          <div id="today-dots" class="today-dots"></div>
-          <p id="today-text" class="today-text"></p>
-        </div>
-        <p class="muted tiny">Learn 2 ayahs a day. For each one: play it 10 times, answer the question, then tap "I understand". The next ayah opens only when you finish the one before it.</p>
-      </div>
-
-      <div id="study-body"><p class="muted">Loading…</p></div>
-
+    <!-- VERSE OF THE DAY TAB -->
+    <section id="tab-verse" class="tab-panel">
       <div class="card quote-card">
         <h3>✨ Verse of the Day</h3>
         <div id="quote-arabic" class="quote-arabic"></div>
@@ -98,8 +74,24 @@
         <div class="quote-apply"><b>Try this today:</b> <span id="quote-apply"></span></div>
         <a id="quote-youtube-link" class="btn ghost" target="_blank" rel="noopener" hidden>▶ Learn more on YouTube</a>
       </div>
+    </section>
+
+    <!-- STUDY TAB -->
+    <section id="tab-learn" class="tab-panel active">
+
+      <div class="card start-card">
+        <h3>Where do you want to start?</h3>
+        <div class="settings-row" style="padding-top:0; border-bottom:none;">
+          <label for="start-surah-select">Start with this surah</label>
+          <select id="start-surah-select" class="study-select"></select>
+        </div>
+        <p class="muted tiny" style="margin-bottom:0;">You learn 2 ayahs a day. Play each ayah 5 times and tap "I understand". After you finish a whole surah, a short quiz asks what it means. You can change where you start any time. What you already learned stays learned.</p>
+      </div>
+
+      <div id="study-body"><p class="muted">Loading…</p></div>
 
       <audio id="ayah-audio" preload="auto" class="sr-audio"></audio>
+      <audio id="study-surah-audio" preload="metadata" class="sr-audio"></audio>
     </section>
 
     <!-- YOUR WINS TAB -->
@@ -262,6 +254,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="app.js?v=18"></script>
+<script src="app.js?v=19"></script>
 </body>
 </html>

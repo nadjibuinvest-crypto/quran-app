@@ -16,7 +16,7 @@ const LS = {
 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DAILY_LIMIT = 2;       // new ayahs each day
-const REQUIRED_PLAYS = 10;   // plays needed for each ayah
+const REQUIRED_PLAYS = 5;    // plays needed for each ayah
 const $ = (id) => document.getElementById(id);
 
 let surahListCache = null;
@@ -70,13 +70,20 @@ function el(tag, className, text) {
 }
 
 // ---------- What this person has learned ----------
-// study.ayahs["108:1"] = { plays: 4, ok: true, done: "2026-10-20" }
+// study.ayahs["108:1"] = { plays: 4, done: "2026-10-20" }
 //   plays = times the ayah was played all the way through
-//   ok    = the question about the ayah was answered right
+// study.quizzes["108"] = { score: 8, total: 9 }   the quiz after the whole surah
 //   done  = the day the person finished the ayah (it stays open until then, no matter how many days)
 function studyData() {
   const d = loadJSON(LS.study, null);
-  return d && d.ayahs && typeof d.ayahs === 'object' ? d : { ayahs: {} };
+  if (!d || !d.ayahs || typeof d.ayahs !== 'object') return { ayahs: {}, quizzes: {} };
+  if (!d.quizzes || typeof d.quizzes !== 'object') d.quizzes = {};
+  return d;
+}
+function setQuizResult(s, result) {
+  const d = studyData();
+  d.quizzes[s] = result;
+  saveJSON(LS.study, d);
 }
 function getAyahState(s, a) {
   const x = studyData().ayahs[`${s}:${a}`] || {};
@@ -135,6 +142,10 @@ function stopAllAudio() {
   ayah.pause();
   ayah.removeAttribute('src');
   delete ayah.dataset.key;
+  const study = $('study-surah-audio');
+  study.pause();
+  study.removeAttribute('src');
+  delete study.dataset.surah;
   listenSurah = null;
 }
 
@@ -469,6 +480,7 @@ async function setSurahAudio(n) {
   if (autoplayNext) {
     autoplayNext = false;
     $('ayah-audio').pause();
+    $('study-surah-audio').pause();
     audio.play().catch(() => {});
   }
 }
@@ -755,8 +767,8 @@ async function renderAyahOfTheDay() {
 
 
 // ---------- Study Tab ----------
-// 2 new ayahs a day. The next ayah only opens after the one before it is finished:
-// played 10 times, the question answered, and "I understand" tapped.
+// 2 new ayahs a day, both shown at once. Each one is finished after it is played 5 times
+// and "I understand" is tapped. After a whole surah is learned, a quiz asks what it means.
 // Time does not open anything by itself. If it takes 3 days, it takes 3 days.
 let studyToken = 0;
 let studyDay = '';
@@ -769,27 +781,15 @@ async function simpleNotes(n) {
   return notesCache.get(n);
 }
 
-// Where Study starts and in what order. Each person picks their own.
-//   order: 'short' = shortest surahs first, 'quran' = 1 to 114, 'back' = 114 to 1
-//   start: a surah number to begin with (then the order goes on from there), or null
-const STUDY_ORDERS = {
-  short: 'Shortest surahs first',
-  quran: 'In Quran order (1 to 114)',
-  back: 'From the end (114 to 1)'
-};
+// Where Study starts. Each person picks their own. The lessons go shortest surah first,
+// and a chosen start surah goes to the front (the order carries on from there).
 function studyPlan() {
   const p = loadJSON(LS.plan, null) || {};
-  return {
-    start: p.start >= 1 && p.start <= 114 ? p.start : null,
-    order: STUDY_ORDERS[p.order] ? p.order : 'short'
-  };
+  return { start: p.start >= 1 && p.start <= 114 ? p.start : null };
 }
 async function getSequence() {
   const plan = studyPlan();
-  let seq;
-  if (plan.order === 'quran') seq = Array.from({ length: 114 }, (_, i) => i + 1);
-  else if (plan.order === 'back') seq = Array.from({ length: 114 }, (_, i) => 114 - i);
-  else seq = (await getStudyOrder()).slice();
+  const seq = (await getStudyOrder()).slice();
   const i = plan.start ? seq.indexOf(plan.start) : -1;
   return i > 0 ? seq.slice(i).concat(seq.slice(0, i)) : seq;
 }
@@ -961,12 +961,12 @@ async function buildAyahCard(s, a, mode) {
       : (st.plays >= REQUIRED_PLAYS ? `✓ Played ${st.plays} times` : `Played ${st.plays} of ${REQUIRED_PLAYS} times`);
     fill.style.width = `${(n / REQUIRED_PLAYS) * 100}%`;
     if (finishBtn) {
-      const ready = st.plays >= REQUIRED_PLAYS && st.ok;
+      const ready = st.plays >= REQUIRED_PLAYS;
+      const more = REQUIRED_PLAYS - st.plays;
       finishBtn.disabled = !ready;
-      const todo = [];
-      if (st.plays < REQUIRED_PLAYS) todo.push(`play it ${REQUIRED_PLAYS - st.plays} more ${REQUIRED_PLAYS - st.plays === 1 ? 'time' : 'times'}`);
-      if (!st.ok) todo.push('answer the question');
-      finishHint.textContent = ready ? 'You did it all. Tap the button.' : `To open the next ayah: ${todo.join(' and ')}.`;
+      finishHint.textContent = ready
+        ? 'You played it enough. If you understand it, tap the button.'
+        : `Play it ${more} more ${more === 1 ? 'time' : 'times'}, then tap the button.`;
     }
   };
   cardRefresh.set(key, refresh);
@@ -986,36 +986,6 @@ async function buildAyahCard(s, a, mode) {
   );
   card.append(links);
 
-  // The question
-  const quizBox = el('div', 'quiz');
-  quizBox.append(el('h4', '', 'Question: what is this ayah about?'));
-  const quiz = await buildQuiz(s, a);
-  const msg = el('p', 'quiz-msg');
-  const opts = quiz.options.map((text, i) => {
-    const b = el('button', 'quiz-opt', text);
-    b.type = 'button';
-    b.addEventListener('click', () => {
-      if (i === quiz.answer) {
-        setAyahState(s, a, { ok: true });
-        showSolved();
-        refresh();
-      } else {
-        b.classList.add('wrong');
-        b.disabled = true;
-        msg.textContent = 'Not quite. Read what the ayah means, then try again.';
-      }
-    });
-    return b;
-  });
-  function showSolved() {
-    opts.forEach((b, i) => { b.disabled = true; b.classList.toggle('right', i === quiz.answer); b.classList.remove('wrong'); });
-    msg.textContent = '✓ Yes, that is right!';
-  }
-  opts.forEach(b => quizBox.append(b));
-  quizBox.append(msg);
-  card.append(quizBox);
-  if (getAyahState(s, a).ok) showSolved();
-
   // Finish
   const fin = el('div', 'finish-box');
   finishBtn = el('button', 'btn primary finish-btn', '✓ I understand this ayah');
@@ -1032,34 +1002,221 @@ async function buildAyahCard(s, a, mode) {
 
 function finishAyah(s, a, meta) {
   const st = getAyahState(s, a);
-  if (st.plays < REQUIRED_PLAYS || !st.ok) return;
+  if (st.plays < REQUIRED_PLAYS) return;
   setAyahState(s, a, { done: todayStr(), at: Date.now() });
   $('ayah-audio').pause();
   const total = meta.numberOfAyahs;
   let all = true;
   for (let i = 1; i <= total; i++) if (!getAyahState(s, i).done) { all = false; break; }
-  showToast(all ? `🎉 You learned all of Surah ${meta.englishName}!` : '✓ Ayah learned!', 4000);
+  showToast(all ? `🎉 You learned all of Surah ${meta.englishName}! A short quiz is waiting.` : '✓ Ayah learned!', 4000);
   renderStudy();
   window.scrollTo(0, 0);
 }
 
-function lockedCard(s, a, meta) {
-  const card = el('div', 'card ayah-locked');
-  card.append(el('div', 'lock-icon', '🔒'));
-  const t = el('div', '');
-  t.append(el('b', '', `Next: Surah ${meta.englishName}, ayah ${a}`));
-  t.append(el('p', 'muted', 'This one opens after you finish the ayah above.'));
-  card.append(t);
+// ---------- The big button: listen to the whole surah ----------
+let studyObjectUrl = null;
+function buildSurahPlayCard(s, meta) {
+  const card = el('div', 'card surah-play-card');
+  card.append(el('h3', '', `Listen to Surah ${meta.englishName}`));
+  const row = el('div', 'player');
+  const btn = el('button', 'play-big study-surah-btn', '▶');
+  btn.type = 'button';
+  btn.dataset.surah = String(s);
+  btn.setAttribute('aria-label', 'Play the whole surah');
+  btn.addEventListener('click', () => toggleStudySurah(s));
+  const side = el('div', 'player-main');
+  side.append(el('div', 'study-surah-time', 'Tap the big button to hear the whole surah.'));
+  row.append(btn, side);
+  card.append(row);
+  card.append(el('p', 'muted tiny', 'Listen first. Then learn your ayahs below. To hear it with no internet, save it in All Surahs.'));
   return card;
 }
 
-function renderTodayBar(doneToday, learnedTotal) {
-  const dots = $('today-dots');
-  dots.innerHTML = '';
-  for (let i = 0; i < DAILY_LIMIT; i++) dots.append(el('span', 'dot' + (i < doneToday ? ' on' : '')));
-  $('today-text').textContent = doneToday >= DAILY_LIMIT
-    ? `Today: ${DAILY_LIMIT} of ${DAILY_LIMIT} ayahs learned. Well done!`
-    : `Today: ${doneToday} of ${DAILY_LIMIT} ayahs learned`;
+async function toggleStudySurah(n) {
+  const au = $('study-surah-audio');
+  if (au.dataset.surah === String(n) && au.src) {
+    if (au.paused) au.play().catch(() => {});
+    else au.pause();
+    return;
+  }
+  au.pause();
+  au.dataset.surah = String(n);
+  au.dataset.failedOver = '';
+  if (studyObjectUrl) { URL.revokeObjectURL(studyObjectUrl); studyObjectUrl = null; }
+  let src = audioUrl(n);
+  try {
+    const c = await caches.open(AUDIO_CACHE);
+    const hit = await c.match(src);
+    if (hit) { studyObjectUrl = URL.createObjectURL(await hit.blob()); src = studyObjectUrl; }
+  } catch (e) { /* play from the internet */ }
+  if (au.dataset.surah !== String(n)) return;
+  au.src = src;
+  au.play().catch(() => {});
+}
+
+function syncStudySurah() {
+  const au = $('study-surah-audio');
+  document.querySelectorAll('.study-surah-btn').forEach(b => {
+    const on = au.dataset.surah === b.dataset.surah && !au.paused && !au.ended;
+    b.textContent = on ? '⏸' : '▶';
+    b.setAttribute('aria-label', on ? 'Pause' : 'Play the whole surah');
+  });
+  const t = document.querySelector('.study-surah-time');
+  const btn = document.querySelector('.study-surah-btn');
+  if (t && btn && au.src && au.dataset.surah === btn.dataset.surah) {
+    t.textContent = `${fmtClock(au.currentTime)} / ${isFinite(au.duration) ? fmtClock(au.duration) : '--:--'}`;
+  }
+}
+
+function initStudySurahAudio() {
+  const au = $('study-surah-audio');
+  au.addEventListener('play', () => { $('audio-player').pause(); $('ayah-audio').pause(); syncStudySurah(); });
+  ['pause', 'ended', 'timeupdate', 'loadedmetadata'].forEach(ev => au.addEventListener(ev, syncStudySurah));
+  au.addEventListener('error', () => {
+    const n = parseInt(au.dataset.surah || '', 10);
+    if (!n || !au.src) return;
+    if (!navigator.onLine && !au.src.startsWith('blob:')) {
+      showToast('No internet. Save this surah in All Surahs to hear it anywhere.', 4000);
+      return;
+    }
+    if (au.dataset.failedOver === '1' || au.src.startsWith('blob:')) return;
+    au.dataset.failedOver = '1';
+    au.src = backupAudioUrl(n);
+    au.load();
+    au.play().catch(() => {});
+  });
+}
+
+// ---------- Quiz after a whole surah ----------
+// 5 to 10 questions made only from the surah's own data: the ayahs, the simple notes,
+// its name, how many ayahs it has and where it came down.
+async function pendingQuizSurah(list) {
+  const d = studyData();
+  const count = {};
+  const last = {};
+  Object.entries(d.ayahs).forEach(([k, v]) => {
+    if (!v.done) return;
+    const s = parseInt(k.split(':')[0], 10);
+    count[s] = (count[s] || 0) + 1;
+    last[s] = Math.max(last[s] || 0, v.at || 0);
+  });
+  const full = Object.keys(count).map(Number)
+    .filter(s => count[s] >= list[s - 1].numberOfAyahs && !d.quizzes[s])
+    .sort((x, y) => last[y] - last[x]);
+  return full[0] || null;
+}
+
+async function buildSurahQuiz(s, attempt) {
+  const list = await getSurahList();
+  const meta = list[s - 1];
+  const total = meta.numberOfAyahs;
+  const q = await getQuranFile(s);
+  const words = q[currentLanguage()] || q.en;
+  const notes = await simpleNotes(s);
+  const hasNotes = !!(notes && notes.length >= total && notes.slice(0, total).every(Boolean));
+  const seed = s * 101 + attempt * 13;
+  const nums = Array.from({ length: total }, (_, i) => i + 1);
+  const ayahs = seededShuffle(nums, seed);
+  const items = [];
+
+  // "What is this ayah about?" (needs the simple notes)
+  const A = hasNotes ? ayahs.slice(0, 4) : [];
+  for (const a of A) {
+    const z = await buildQuiz(s, a);
+    items.push({ prompt: `Ayah ${a} says: “${words[a - 1]}” What is it about?`, options: z.options, answer: z.answer });
+  }
+  // "Which ayah is this?"
+  const B = total <= 4 ? ayahs : ayahs.slice(hasNotes ? 4 : 0, hasNotes ? 7 : 5);
+  for (const a of B) {
+    const others = seededShuffle(nums.filter(n => n !== a), seed + a).slice(0, 2);
+    const opts = seededShuffle([a].concat(others), seed + a * 3);
+    items.push({
+      prompt: `Which ayah is this? “${hasNotes ? notes[a - 1] : words[a - 1]}”`,
+      options: opts.map(n => `Ayah ${n}`),
+      answer: opts.indexOf(a)
+    });
+  }
+  // How many ayahs?
+  const nearby = seededShuffle([total - 2, total - 1, total + 1, total + 2, total + 3].filter(n => n >= 1 && n !== total), seed + 5).slice(0, 2);
+  const cOpts = seededShuffle([total].concat(nearby), seed + 6);
+  items.push({ prompt: `How many ayahs does Surah ${meta.englishName} have?`, options: cOpts.map(String), answer: cOpts.indexOf(total) });
+  // What does the name mean?
+  const names = [...new Set(list.filter(x => x.number !== s).map(x => x.englishNameTranslation).filter(n => n && n !== meta.englishNameTranslation))];
+  const dOpts = seededShuffle([meta.englishNameTranslation].concat(seededShuffle(names, seed + 7).slice(0, 2)), seed + 8);
+  items.push({ prompt: `What does the name “${meta.englishName}” mean?`, options: dOpts, answer: dOpts.indexOf(meta.englishNameTranslation) });
+  // Where did it come down?
+  const place = meta.revelationType === 'Medinan' ? 'Madinah' : 'Makkah';
+  const eOpts = seededShuffle(['Makkah', 'Madinah'], seed + 9);
+  items.push({ prompt: `Where did Surah ${meta.englishName} come down?`, options: eOpts, answer: eOpts.indexOf(place) });
+
+  return seededShuffle(items, seed + 11).slice(0, 10);
+}
+
+function buildQuizCard(s, list) {
+  const meta = list[s - 1];
+  const card = el('div', 'card quiz-card');
+  let attempt = 0;
+  let questions = [];
+  let i = 0;
+  let score = 0;
+
+  async function start() {
+    card.innerHTML = '';
+    card.append(el('p', 'muted', 'Loading the questions…'));
+    questions = await buildSurahQuiz(s, attempt);
+    i = 0;
+    score = 0;
+    show();
+  }
+
+  function show() {
+    card.innerHTML = '';
+    card.append(el('h3', '', `Quiz: what does Surah ${meta.englishName} mean?`));
+    if (i >= questions.length) { results(); return; }
+    const qn = questions[i];
+    card.append(el('p', 'muted tiny', `Question ${i + 1} of ${questions.length}`));
+    card.append(el('p', 'quiz-q', qn.prompt));
+    const msg = el('p', 'quiz-msg');
+    const next = el('button', 'btn primary', i + 1 >= questions.length ? 'See my score' : 'Next ›');
+    next.type = 'button';
+    next.hidden = true;
+    next.addEventListener('click', () => { i++; show(); });
+    const opts = qn.options.map((text, k) => {
+      const b = el('button', 'quiz-opt', text);
+      b.type = 'button';
+      b.addEventListener('click', () => {
+        opts.forEach((x, j) => { x.disabled = true; if (j === qn.answer) x.classList.add('right'); });
+        if (k === qn.answer) { score++; msg.textContent = '✓ Yes, that is right!'; }
+        else { b.classList.add('wrong'); msg.textContent = 'Not this time. The right answer is in green.'; }
+        next.hidden = false;
+      });
+      return b;
+    });
+    opts.forEach(b => card.append(b));
+    card.append(msg, next);
+  }
+
+  function results() {
+    const good = score / questions.length >= 0.8;
+    card.append(el('div', 'quiz-score', `${score} of ${questions.length}`));
+    card.append(el('p', '', good ? '🎉 Great job! You know what this surah means.' : 'Good try! Listen to the surah again and try again, or finish now.'));
+    const row = el('div', 'quiz-actions');
+    const again = el('button', 'btn secondary', '↻ Try again');
+    again.type = 'button';
+    again.addEventListener('click', () => { attempt++; start(); });
+    const done = el('button', 'btn primary', '✓ Finish');
+    done.type = 'button';
+    done.addEventListener('click', () => {
+      setQuizResult(s, { score, total: questions.length, at: Date.now() });
+      renderStudy();
+      window.scrollTo(0, 0);
+    });
+    row.append(again, done);
+    card.append(row);
+  }
+
+  start();
+  return card;
 }
 
 async function renderStudy() {
@@ -1071,7 +1228,6 @@ async function renderStudy() {
   const body = $('study-body');
   const doneToday = doneTodayCount();
   const left = Math.max(0, DAILY_LIMIT - doneToday);
-  renderTodayBar(doneToday);
 
   let upcoming = [];
   let list = null;
@@ -1092,6 +1248,11 @@ async function renderStudy() {
     .filter(([, v]) => v.done === todayStr())
     .sort((x, y) => (x[1].at || 0) - (y[1].at || 0))
     .map(([k]) => k.split(':').map(Number));
+
+  // A finished surah gets its quiz first.
+  const quizSurah = await pendingQuizSurah(list);
+  if (token !== studyToken) return;
+  if (quizSurah) nodes.push(buildQuizCard(quizSurah, list));
 
   if (!upcoming.length) {
     const c = el('div', 'card empty-state');
@@ -1126,8 +1287,9 @@ async function renderStudy() {
       det.append(el('p', 'about-text', info.summary));
       nodes.push(det);
     }
-    nodes.push(await buildAyahCard(first.s, first.a, 'active'));
-    if (left >= 2 && upcoming[1]) nodes.push(lockedCard(upcoming[1].s, upcoming[1].a, list[upcoming[1].s - 1]));
+    // The big button, then both ayahs at once
+    nodes.push(buildSurahPlayCard(first.s, list[first.s - 1]));
+    for (const x of upcoming.slice(0, left)) nodes.push(await buildAyahCard(x.s, x.a, 'active'));
   }
 
   if (todayCards.length) {
@@ -1139,31 +1301,27 @@ async function renderStudy() {
   body.innerHTML = '';
   nodes.forEach(n => body.append(n));
   syncPlayButtons();
+  syncStudySurah();
   prefetchAhead(10);
 }
 
 // ---------- Choose where to start ----------
 function fillStartPicker(list) {
   const sel = $('start-surah-select');
-  const plan = studyPlan();
   if (!sel.options.length) {
-    sel.append(new Option('The first lesson in my order', ''));
+    sel.append(new Option('The first lesson (shortest surah)', ''));
     list.forEach(s => sel.append(new Option(`${s.number}. ${s.englishName} (${s.numberOfAyahs} ayahs)`, String(s.number))));
-    const ord = $('study-order-select');
-    Object.entries(STUDY_ORDERS).forEach(([v, label]) => ord.append(new Option(label, v)));
   }
+  const plan = studyPlan();
   sel.value = plan.start ? String(plan.start) : '';
-  $('study-order-select').value = plan.order;
 }
 
 function initStudyPlan() {
-  const save = () => {
+  $('start-surah-select').addEventListener('change', () => {
     const start = parseInt($('start-surah-select').value, 10) || null;
-    saveJSON(LS.plan, { start, order: $('study-order-select').value });
+    saveJSON(LS.plan, { start });
     renderStudy();
-  };
-  $('start-surah-select').addEventListener('change', save);
-  $('study-order-select').addEventListener('change', save);
+  });
 }
 
 // ---------- Playing one ayah ----------
@@ -1201,7 +1359,7 @@ function syncPlayButtons() {
 
 function initAyahAudio() {
   const au = $('ayah-audio');
-  au.addEventListener('play', () => { $('audio-player').pause(); syncPlayButtons(); });
+  au.addEventListener('play', () => { $('audio-player').pause(); $('study-surah-audio').pause(); syncPlayButtons(); });
   au.addEventListener('pause', syncPlayButtons);
   au.addEventListener('ended', () => {
     const key = au.dataset.key;
@@ -1289,6 +1447,8 @@ async function renderWins() {
     row.append(el('span', 'win-detail' + (doneAll ? ' win-all' : ''),
       doneAll ? `✓ You learned all ${meta.numberOfAyahs} ayahs` : `You have learned ${r.ayahs.length}${of} ${r.ayahs.length === 1 && !meta ? 'ayah' : 'ayahs'}`));
     row.append(el('span', 'muted tiny', `Ayah ${rangeText(r.ayahs)}`));
+    const qz = studyData().quizzes[r.s];
+    if (qz) row.append(el('span', 'win-detail', `Quiz: ${qz.score} of ${qz.total} right`));
     box.append(row);
   });
 }
@@ -1381,6 +1541,7 @@ async function showListen(n, autoplay) {
     setSurahAudio(n);
   } else if (autoplay && audio.paused) {
     $('ayah-audio').pause();
+    $('study-surah-audio').pause();
     audio.play().catch(() => {});
   }
   renderListenVerses(n);
@@ -1479,7 +1640,7 @@ function initPlayerUI() {
     if (audio.paused) audio.play().catch(() => {});
     else audio.pause();
   });
-  audio.addEventListener('play', () => { applySpeed(); setPlayIcon(true); $('ayah-audio').pause(); renderNowPlaying(); });
+  audio.addEventListener('play', () => { applySpeed(); setPlayIcon(true); $('ayah-audio').pause(); $('study-surah-audio').pause(); renderNowPlaying(); });
   audio.addEventListener('pause', () => { setPlayIcon(false); renderNowPlaying(); });
   audio.addEventListener('ended', () => {
     setPlayIcon(false);
@@ -1593,6 +1754,7 @@ window.addEventListener('DOMContentLoaded', () => {
   initSurahSearch();
   initPlayerUI();
   initAyahAudio();
+  initStudySurahAudio();
   initStudyPlan();
   initSettingsActions();
 
