@@ -342,3 +342,14 @@ main { padding: 18px; }
 .quiz-card .quiz-msg { margin-bottom: 12px; }
 .surah-play-card .player { margin-top: 10px; }
 .study-surah-time { font-size: 1rem; font-weight: 700; color: var(--muted); }
+
+/* Study: back 5 seconds, slow speeds, the learned list */
+.audio-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0 10px; }
+.audio-controls .speed-btn { padding: 9px 12px; font-size: 0.9rem; }
+.back-btn { border-color: var(--accent); }
+.learned-group > summary { cursor: pointer; font-weight: 700; }
+.learned-inner { margin-top: 12px; display: flex; flex-direction: column; gap: 12px; }
+.learned-inner .ayah-card { margin: 0; }
+.done-meaning { margin-top: 10px; }
+.done-meaning > summary { cursor: pointer; font-weight: 600; color: var(--accent); }
+.surah-intro h3 { margin: 0 0 2px; }

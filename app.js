@@ -2,7 +2,7 @@
 // Every person on this phone gets their own set of keys, so progress never mixes.
 const PROFILES_KEY = 'qa_profiles';       // [{ id, name, pinHash }]
 const ACTIVE_KEY = 'qa_active_profile';   // id of the person using the app now
-const PROFILE_FIELDS = ['current', 'surahs', 'reciter', 'monthly_goal', 'loop', 'language', 'study', 'listen', 'plan', 'speed'];
+const PROFILE_FIELDS = ['current', 'surahs', 'reciter', 'monthly_goal', 'loop', 'language', 'study', 'listen', 'plan', 'speed', 'studyspeed'];
 let activeProfileId = null;
 function profileKey(field) { return `qa_p${activeProfileId}_${field}`; }
 const LS = {
@@ -12,7 +12,8 @@ const LS = {
   get language() { return profileKey('language'); }, // en, sw or fr
   get listen() { return profileKey('listen'); },     // last surah played in All Surahs
   get plan() { return profileKey('plan'); },         // where Study starts and in what order
-  get speed() { return profileKey('speed'); }        // listening speed in All Surahs
+  get speed() { return profileKey('speed'); },       // listening speed in All Surahs
+  get studySpeed() { return profileKey('studyspeed'); } // speed of the ayahs and the surah in Study
 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DAILY_LIMIT = 2;       // new ayahs each day
@@ -340,6 +341,7 @@ const NOTES_URL = (n) => `data/ayah-simple/${n}.json?v=3`;
 const NOTES_INDEX_URL = 'data/notes-index.json?v=1';
 const STUDY_ORDER_URL = 'data/study-order.json?v=1';
 const MEANINGS_INDEX_URL = 'data/meanings-index.json?v=1';
+const SURAH_MEANING_URL = 'data/surah-meaning.json?v=1';
 const MEANINGS_URL = (n) => `data/meanings/${n}.json?v=1`;
 // Old books, only for lessons that have no prepared notes yet. Shown in the books' own words.
 const BOOKS = [
@@ -390,6 +392,17 @@ async function getMeanings(n) {
     if (!meaningsIndexCache) meaningsIndexCache = await fetchJSONCached(MEANINGS_INDEX_URL);
     if (!meaningsIndexCache.includes(n)) return null;
     return (await fetchJSONCached(MEANINGS_URL(n))).ayahs;
+  } catch (e) {
+    return null;
+  }
+}
+
+// What the Prophet ﷺ and the scholars said about a whole surah (only the prepared lessons have it).
+let surahMeaningCache = null;
+async function getSurahMeaning(n) {
+  try {
+    if (!surahMeaningCache) surahMeaningCache = await fetchJSONCached(SURAH_MEANING_URL);
+    return surahMeaningCache[String(n)] || null;
   } catch (e) {
     return null;
   }
@@ -931,7 +944,7 @@ async function buildAyahCard(s, a, mode) {
 
   const head = el('div', 'ayah-head');
   head.append(el('span', 'verse-num', `Surah ${meta.englishName} · Ayah ${a} of ${meta.numberOfAyahs}`));
-  if (isDone) head.append(el('span', 'chip chip-done', '✓ Learned'));
+  if (isDone) head.append(el('span', 'chip chip-done', getAyahState(s, a).done === todayStr() ? '✓ Learned today' : '✓ Learned'));
   card.append(head);
   card.append(el('div', 'verse-arabic', stripBismillah(q.ar[a - 1], s, a)));
   card.append(el('div', 'verse-translit', q.tl[a - 1]));
@@ -946,6 +959,7 @@ async function buildAyahCard(s, a, mode) {
   const count = el('div', 'ayah-count');
   playRow.append(playBtn, count);
   card.append(playRow);
+  card.append(buildAudioControls('ayah-audio', () => $('ayah-audio').dataset.key === key));
   const track = el('div', 'progress-track');
   const fill = el('div', 'progress-fill');
   track.append(fill);
@@ -972,8 +986,18 @@ async function buildAyahCard(s, a, mode) {
   cardRefresh.set(key, refresh);
 
   if (isDone) {
+    const det = el('details', 'done-meaning');
+    det.append(el('summary', '', 'See what this ayah means'));
+    let built = false;
+    det.addEventListener('toggle', async () => {
+      if (!det.open || built) return;
+      built = true;
+      det.append(await buildMeaning(s, a, meta));
+    });
+    card.append(det);
     refresh();
     syncPlayButtons();
+    syncStudySpeedButtons();
     return card;
   }
 
@@ -997,6 +1021,7 @@ async function buildAyahCard(s, a, mode) {
 
   refresh();
   syncPlayButtons();
+  syncStudySpeedButtons();
   return card;
 }
 
@@ -1028,6 +1053,7 @@ function buildSurahPlayCard(s, meta) {
   side.append(el('div', 'study-surah-time', 'Tap the big button to hear the whole surah.'));
   row.append(btn, side);
   card.append(row);
+  card.append(buildAudioControls('study-surah-audio', () => $('study-surah-audio').dataset.surah === String(s)));
   card.append(el('p', 'muted tiny', 'Listen first. Then learn your ayahs below. To hear it with no internet, save it in All Surahs.'));
   return card;
 }
@@ -1051,6 +1077,7 @@ async function toggleStudySurah(n) {
   } catch (e) { /* play from the internet */ }
   if (au.dataset.surah !== String(n)) return;
   au.src = src;
+  applyStudySpeed();
   au.play().catch(() => {});
 }
 
@@ -1070,7 +1097,7 @@ function syncStudySurah() {
 
 function initStudySurahAudio() {
   const au = $('study-surah-audio');
-  au.addEventListener('play', () => { $('audio-player').pause(); $('ayah-audio').pause(); syncStudySurah(); });
+  au.addEventListener('play', () => { applyStudySpeed(); $('audio-player').pause(); $('ayah-audio').pause(); syncStudySurah(); });
   ['pause', 'ended', 'timeupdate', 'loadedmetadata'].forEach(ev => au.addEventListener(ev, syncStudySurah));
   au.addEventListener('error', () => {
     const n = parseInt(au.dataset.surah || '', 10);
@@ -1219,6 +1246,82 @@ function buildQuizCard(s, list) {
   return card;
 }
 
+// "About this surah": what it tells, what the Prophet ﷺ and the scholars said, and questions to think about.
+async function buildAboutCard(s, meta) {
+  const [info, sm] = await Promise.all([getSurahInfo(s).catch(() => null), getSurahMeaning(s)]);
+  const card = el('details', 'card surah-intro');
+  card.open = true;
+  card.append(el('summary', '', `About Surah ${meta.englishName} (tap to close or open)`));
+  card.append(el('p', 'muted tiny', `${meta.englishNameTranslation} · ${meta.numberOfAyahs} ayahs · came down in ${meta.revelationType === 'Medinan' ? 'Madinah' : 'Makkah'}`));
+  if (info) card.append(el('p', 'about-text', info.summary));
+  if (sm) {
+    if (sm.tells) {
+      const t = el('div', 'meaning-block');
+      t.append(el('h5', '', 'What this surah tells us'), el('p', 'about-text', sm.tells));
+      card.append(t);
+    }
+    const p = el('div', 'meaning-block');
+    p.append(el('h5', '', 'What the Prophet ﷺ said about it'));
+    if (sm.prophet && sm.prophet.length) fillList(p, sm.prophet);
+    else p.append(el('p', 'muted tiny', 'The books we used do not tell a hadith about this whole surah.'));
+    card.append(p);
+    const sc = el('div', 'meaning-block');
+    sc.append(el('h5', '', 'What the scholars wrote about it'));
+    if (sm.scholars && sm.scholars.length) fillList(sc, sm.scholars);
+    card.append(sc);
+    card.append(el('p', 'muted tiny', 'These notes tell what the old books say, in simple words. Each note names its book. A teacher can tell you more.'));
+  } else {
+    card.append(el('p', 'muted tiny', 'The notes from the Prophet ﷺ and the scholars about this whole surah are not written yet. Each ayah below has its own notes when they are ready.'));
+  }
+  if (info && info.questions && info.questions.length) {
+    const q = el('div', 'meaning-block');
+    q.append(el('h5', '', 'Think about it'));
+    fillList(q, info.questions);
+    card.append(q);
+  }
+  return card;
+}
+
+// Everything the person already learned stays here, with its own play button, speed and play count.
+async function buildLearnedList(list, token) {
+  const bySurah = new Map();
+  Object.entries(studyData().ayahs).forEach(([k, v]) => {
+    if (!v.done) return;
+    const [s, a] = k.split(':').map(Number);
+    if (!bySurah.has(s)) bySurah.set(s, { s, items: [], last: 0, today: false });
+    const g = bySurah.get(s);
+    g.items.push(a);
+    g.last = Math.max(g.last, v.at || 0);
+    if (v.done === todayStr()) g.today = true;
+  });
+  if (!bySurah.size) return null;
+  const groups = [...bySurah.values()].sort((x, y) => y.last - x.last);
+  const wrap = el('div', 'learned-list');
+  wrap.append(el('h3', 'section-title', '✓ Everything you learned'));
+  wrap.append(el('p', 'muted tiny', 'Every ayah you finish stays here. Play it again any time, slower if you want.'));
+  for (let gi = 0; gi < groups.length; gi++) {
+    const g = groups[gi];
+    const meta = list[g.s - 1];
+    const det = el('details', 'card learned-group');
+    det.append(el('summary', '', `Surah ${meta.englishName} · ${g.items.length} of ${meta.numberOfAyahs} ayahs learned`));
+    const inner = el('div', 'learned-inner');
+    det.append(inner);
+    let built = false;
+    const build = async () => {
+      if (built) return;
+      built = true;
+      for (const a of g.items.sort((x, y) => x - y)) inner.append(await buildAyahCard(g.s, a, 'done'));
+      syncPlayButtons();
+      syncStudySpeedButtons();
+    };
+    det.addEventListener('toggle', () => { if (det.open) build(); });
+    if (gi === 0 || g.today) { det.open = true; await build(); }
+    if (token !== studyToken) return null;
+    wrap.append(det);
+  }
+  return wrap;
+}
+
 async function renderStudy() {
   const token = ++studyToken;
   studyDay = todayStr();
@@ -1244,22 +1347,18 @@ async function renderStudy() {
   fillStartPicker(list);
 
   const nodes = [];
-  const todayCards = Object.entries(studyData().ayahs)
-    .filter(([, v]) => v.done === todayStr())
-    .sort((x, y) => (x[1].at || 0) - (y[1].at || 0))
-    .map(([k]) => k.split(':').map(Number));
 
   // A finished surah gets its quiz first.
   const quizSurah = await pendingQuizSurah(list);
   if (token !== studyToken) return;
   if (quizSurah) nodes.push(buildQuizCard(quizSurah, list));
 
-  if (!upcoming.length) {
+  const first = upcoming[0] || null;
+  if (!first) {
     const c = el('div', 'card empty-state');
     c.append(el('h2', '', '🎉 You finished every lesson!'), el('p', 'muted', 'You learned all the ayahs, one by one. Use All Surahs to listen anytime.'));
     nodes.push(c);
   } else if (left === 0) {
-    const nx = upcoming[0];
     const c = el('div', 'card lock-card');
     c.append(el('div', 'lock-big', '🔒'));
     c.append(el('h2', '', `You learned your ${DAILY_LIMIT} ayahs today!`));
@@ -1267,7 +1366,7 @@ async function renderStudy() {
     const timer = el('div', 'lock-timer');
     timer.id = 'lock-timer';
     timer.textContent = fmtCountdown(msUntilMidnight());
-    c.append(timer, el('p', 'muted tiny', `Opens in hours : minutes : seconds. Next: Surah ${list[nx.s - 1].englishName}, ayah ${nx.a}.`));
+    c.append(timer, el('p', 'muted tiny', `Opens in hours : minutes : seconds. Next: Surah ${list[first.s - 1].englishName}, ayah ${first.a}.`));
     nodes.push(c);
     const day = todayStr();
     lockTimer = setInterval(() => {
@@ -1275,28 +1374,19 @@ async function renderStudy() {
       const t = $('lock-timer');
       if (t) t.textContent = fmtCountdown(msUntilMidnight());
     }, 1000);
-  } else {
-    const first = upcoming[0];
-    // About this surah, in simple words
-    const info = await getSurahInfo(first.s).catch(() => null);
-    if (token !== studyToken) return;
-    if (info) {
-      const det = el('details', 'card surah-intro');
-      det.open = first.a === 1;
-      det.append(el('summary', '', `About Surah ${list[first.s - 1].englishName}`));
-      det.append(el('p', 'about-text', info.summary));
-      nodes.push(det);
-    }
+  }
+  if (first) {
+    // About the surah is always here at the start, so it can be read every time.
+    nodes.push(await buildAboutCard(first.s, list[first.s - 1]));
     // The big button, then both ayahs at once
     nodes.push(buildSurahPlayCard(first.s, list[first.s - 1]));
-    for (const x of upcoming.slice(0, left)) nodes.push(await buildAyahCard(x.s, x.a, 'active'));
+    if (left > 0) {
+      for (const x of upcoming.slice(0, left)) nodes.push(await buildAyahCard(x.s, x.a, 'active'));
+    }
   }
 
-  if (todayCards.length) {
-    const h = el('h3', 'section-title', 'Learned today');
-    nodes.push(h);
-    for (const [s, a] of todayCards) nodes.push(await buildAyahCard(s, a, 'done'));
-  }
+  const learned = await buildLearnedList(list, token);
+  if (learned) nodes.push(learned);
   if (token !== studyToken) return;
   body.innerHTML = '';
   nodes.forEach(n => body.append(n));
@@ -1324,6 +1414,59 @@ function initStudyPlan() {
   });
 }
 
+// ---------- Slow down and go back 5 seconds (Study) ----------
+const STUDY_SPEEDS = [0.5, 0.75, 1];
+function currentStudySpeed() {
+  const v = parseFloat(localStorage.getItem(LS.studySpeed));
+  return STUDY_SPEEDS.includes(v) ? v : 1;
+}
+function applyStudySpeed() {
+  const r = currentStudySpeed();
+  ['ayah-audio', 'study-surah-audio'].forEach(id => {
+    const au = $(id);
+    au.defaultPlaybackRate = r;
+    au.playbackRate = r;
+  });
+}
+function syncStudySpeedButtons() {
+  const cur = currentStudySpeed();
+  document.querySelectorAll('.study-speed-btn').forEach(b => {
+    const on = parseFloat(b.dataset.rate) === cur;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+// A row with "back 5 seconds" and the speed buttons. target = the audio element to control,
+// and ok() says whether that element is playing this card's sound right now.
+function buildAudioControls(audioId, ok) {
+  const row = el('div', 'audio-controls');
+  const back = el('button', 'speed-btn back-btn', '⏪ 5 sec');
+  back.type = 'button';
+  back.setAttribute('aria-label', 'Go back 5 seconds');
+  back.addEventListener('click', () => {
+    const au = $(audioId);
+    if (!ok() || !au.src) { showToast('Tap play first. Then you can go back 5 seconds.', 2500); return; }
+    const wasEnded = au.ended;
+    au.currentTime = wasEnded && isFinite(au.duration) ? Math.max(0, au.duration - 5) : Math.max(0, au.currentTime - 5);
+    if (au.paused) au.play().catch(() => {});
+  });
+  row.append(back);
+  const box = el('div', 'speed-buttons');
+  STUDY_SPEEDS.forEach(r => {
+    const b = el('button', 'speed-btn study-speed-btn', r === 1 ? 'Normal' : `Slow ${r}×`);
+    b.type = 'button';
+    b.dataset.rate = String(r);
+    b.addEventListener('click', () => {
+      localStorage.setItem(LS.studySpeed, String(r));
+      applyStudySpeed();
+      syncStudySpeedButtons();
+    });
+    box.append(b);
+  });
+  row.append(box);
+  return row;
+}
+
 // ---------- Playing one ayah ----------
 async function playAyah(s, a) {
   const au = $('ayah-audio');
@@ -1345,6 +1488,7 @@ async function playAyah(s, a) {
   } catch (e) { /* play from the internet */ }
   if (au.dataset.key !== key) return;
   au.src = src;
+  applyStudySpeed();
   au.play().catch(() => {});
   if (!src.startsWith('blob:')) cacheAyahAudio(s, a);
 }
@@ -1359,7 +1503,7 @@ function syncPlayButtons() {
 
 function initAyahAudio() {
   const au = $('ayah-audio');
-  au.addEventListener('play', () => { $('audio-player').pause(); $('study-surah-audio').pause(); syncPlayButtons(); });
+  au.addEventListener('play', () => { applyStudySpeed(); $('audio-player').pause(); $('study-surah-audio').pause(); syncPlayButtons(); });
   au.addEventListener('pause', syncPlayButtons);
   au.addEventListener('ended', () => {
     const key = au.dataset.key;
@@ -1755,6 +1899,7 @@ window.addEventListener('DOMContentLoaded', () => {
   initPlayerUI();
   initAyahAudio();
   initStudySurahAudio();
+  applyStudySpeed();
   initStudyPlan();
   initSettingsActions();
 
