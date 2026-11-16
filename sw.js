@@ -2,7 +2,7 @@
 // - The app itself is saved when it is first opened (REQUIRED / OPTIONAL below).
 // - Quran words, notes and questions live in /data/ and are saved on the phone too.
 // - Saved audio is kept in its own storage by the app and is never deleted here.
-const CACHE_NAME = 'quran-app-v22';
+const CACHE_NAME = 'quran-app-v23';
 const DATA_CACHE = 'quran-data';
 
 // If any of these cannot be saved, the install stops and is tried again later,
@@ -11,7 +11,7 @@ const REQUIRED = [
   './',
   './index.html',
   './styles.css?v=13',
-  './app.js?v=20',
+  './app.js?v=21',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -23,7 +23,7 @@ const OPTIONAL = [
   './data/surah-info.json?v=2',
   './data/study-order.json?v=1',
   './data/meanings-index.json?v=1',
-  './data/surah-meaning.json?v=1'
+  './data/surah-meaning.json?v=2'
 ];
 
 self.addEventListener('install', (event) => {

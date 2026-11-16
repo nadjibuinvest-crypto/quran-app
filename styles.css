@@ -353,3 +353,7 @@ main { padding: 18px; }
 .done-meaning { margin-top: 10px; }
 .done-meaning > summary { cursor: pointer; font-weight: 600; color: var(--accent); }
 .surah-intro h3 { margin: 0 0 2px; }
+
+.about-more { margin-top: 14px; }
+.about-more > summary { cursor: pointer; font-weight: 700; color: var(--accent); }
+.learned-list > .ayah-card { margin-bottom: 12px; }
